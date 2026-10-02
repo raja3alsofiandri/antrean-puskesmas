@@ -25,7 +25,10 @@ import {
   Clock,
   Smartphone,
   Sparkles,
-  HelpCircle
+  HelpCircle,
+  RotateCcw,
+  ExternalLink,
+  QrCode
 } from 'lucide-react';
 import { 
   supabase, 
@@ -43,31 +46,41 @@ import {
 
 export default function AdminPage() {
   // -------------------------------------------------------------
-  // State Autentikasi & Akun Petugas (Tersimpan di Supabase)
+  // State Autentikasi & Akun Petugas (SSR-Safe Initialization)
   // -------------------------------------------------------------
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return sessionStorage.getItem('admin_is_logged_in') === 'true';
-    }
-    return false;
-  });
+  const [isMounted, setIsMounted] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  const [savedUsername, setSavedUsername] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('admin_username') || 'admin';
-    }
-    return 'admin';
-  });
-  const [savedPass, setSavedPass] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('admin_password') || 'puskesmas123';
-    }
-    return 'puskesmas123';
-  });
+  const [savedUsername, setSavedUsername] = useState('admin');
+  const [savedPass, setSavedPass] = useState('puskesmas123');
   const [activeMenu, setActiveMenu] = useState('antrean'); // 'antrean' | 'profil' | 'laporan' | 'sandi'
 
-  // State Ganti Sandi Form & Verifikasi Username
+  // Sinkronisasi Sesi & Preferensi Lokal Setelah Komponen Ter-Mount (Cegah SSR Mismatch)
+  useEffect(() => {
+    setIsMounted(true);
+    if (typeof window !== 'undefined') {
+      document.documentElement.classList.remove('dark');
+      localStorage.removeItem('theme_mode');
+      localStorage.removeItem('patient_dark_mode');
+
+      const logged = sessionStorage.getItem('admin_is_logged_in') === 'true';
+      if (logged) setIsLoggedIn(true);
+
+      const snd = localStorage.getItem('admin_sound_enabled');
+      if (snd !== null) {
+        setSoundEnabled(snd === 'true');
+      }
+
+      const u = localStorage.getItem('admin_username');
+      if (u) setSavedUsername(u);
+
+      const p = localStorage.getItem('admin_password');
+      if (p) setSavedPass(p);
+    }
+  }, []);
+
+  // State Ganti Sandi Form & Verifikasi Username (Wajib Kosong Default)
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
@@ -75,7 +88,7 @@ export default function AdminPage() {
   const [showNewPass, setShowNewPass] = useState(false);
   const [isChangingPass, setIsChangingPass] = useState(false);
 
-  // Verifikasi Username untuk melihat password saat ini
+  // Verifikasi Username untuk melihat password saat ini (Wajib Kosong Default)
   const [verifyUsernameInput, setVerifyUsernameInput] = useState('');
   const [isPassVerifiedAndRevealed, setIsPassVerifiedAndRevealed] = useState(false);
   const [showRevealedPassword, setShowRevealedPassword] = useState(false);
@@ -88,13 +101,7 @@ export default function AdminPage() {
   const [isAdminAppInstalled, setIsAdminAppInstalled] = useState(false);
 
   // Toggle Suara Admin
-  const [soundEnabled, setSoundEnabled] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const s = localStorage.getItem('admin_sound_enabled');
-      return s !== null ? s === 'true' : true;
-    }
-    return true;
-  });
+  const [soundEnabled, setSoundEnabled] = useState(true);
 
   // -------------------------------------------------------------
   // State Antrean & Operasional
@@ -103,6 +110,8 @@ export default function AdminPage() {
   const [filterStatus, setFilterStatus] = useState('AKTIF'); // 'AKTIF' | 'SEMUA' | 'MENUNGGU' | 'MEMANGGIL' | 'TERLAMBAT' | 'SELESAI'
   const [searchQuery, setSearchQuery] = useState('');
   const [showResetModal, setShowResetModal] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [showPwaInstallGuideModal, setShowPwaInstallGuideModal] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
 
   // Filter Laporan CSV
@@ -121,6 +130,9 @@ export default function AdminPage() {
   const [mapsUrl, setMapsUrl] = useState('https://maps.google.com/?q=-0.5282,102.5853');
   const [latitude, setLatitude] = useState(-0.5282);
   const [longitude, setLongitude] = useState(102.5853);
+  // Pengaturan Layar Display Publik
+  const [displayQrLink, setDisplayQrLink] = useState('');         // Link custom untuk QR di /display
+  const [displaySoundEnabled, setDisplaySoundEnabled] = useState(true); // Suara chime di /display
 
   const toastTimeoutRef = useRef(null);
 
@@ -177,21 +189,37 @@ export default function AdminPage() {
     };
   }, []);
 
-  const handleInstallAdminApp = async () => {
-    if (!deferredAdminPrompt) {
-      showToast('Aplikasi admin dapat dipasang melalui menu browser (Titik 3 ➔ Tambahkan ke Layar Utama / Install).', 'info');
-      return;
+  const toggleSound = () => {
+    const nextVal = !soundEnabled;
+    setSoundEnabled(nextVal);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('admin_sound_enabled', String(nextVal));
     }
-    try {
-      deferredAdminPrompt.prompt();
-      const { outcome } = await deferredAdminPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setIsAdminAppInstalled(true);
-        showToast('Memasang aplikasi admin...', 'success');
+    if (nextVal) {
+      // Gunakan nada lonceng medis yang sama persis dengan suara panggilan pasien
+      playNotificationChime();
+      showToast('Suara pemanggilan loket aktif 🔊', 'success');
+    } else {
+      showToast('Suara pemanggilan dinonaktifkan (mode senyap) 🔇', 'info');
+    }
+  };
+
+  const handleInstallAdminApp = async () => {
+    if (deferredAdminPrompt) {
+      try {
+        deferredAdminPrompt.prompt();
+        const { outcome } = await deferredAdminPrompt.userChoice;
+        if (outcome === 'accepted') {
+          setIsAdminAppInstalled(true);
+          showToast('Aplikasi Admin berhasil dipasang!', 'success');
+        }
+        setDeferredAdminPrompt(null);
+      } catch (err) {
+        console.warn('Admin install error:', err);
+        setShowPwaInstallGuideModal(true);
       }
-      setDeferredAdminPrompt(null);
-    } catch (err) {
-      console.warn('Admin install error:', err);
+    } else {
+      setShowPwaInstallGuideModal(true);
     }
   };
 
@@ -303,6 +331,8 @@ export default function AdminPage() {
           setMapsUrl(cfgData.maps_url || 'https://maps.google.com/?q=-0.5282,102.5853');
           if (cfgData.latitude) setLatitude(parseFloat(cfgData.latitude));
           if (cfgData.longitude) setLongitude(parseFloat(cfgData.longitude));
+          if (cfgData.display_qr_link !== undefined) setDisplayQrLink(cfgData.display_qr_link || '');
+          if (cfgData.display_sound_enabled !== undefined) setDisplaySoundEnabled(cfgData.display_sound_enabled ?? true);
         }
 
         const { data: credData } = await supabase
@@ -709,6 +739,8 @@ export default function AdminPage() {
       maps_url: mapsUrl,
       latitude: latitude,
       longitude: longitude,
+      display_qr_link: displayQrLink.trim(),
+      display_sound_enabled: displaySoundEnabled,
       updated_at: new Date().toISOString(),
     };
 
@@ -810,18 +842,23 @@ export default function AdminPage() {
   const handleUpdatePassword = async (e) => {
     e.preventDefault();
 
-    if (currentPass !== savedPass) {
-      alert('Password saat ini tidak sesuai!');
+    if (!currentPass.trim()) {
+      showToast('Masukkan password saat ini!', 'alert');
+      return;
+    }
+
+    if (currentPass.trim() !== savedPass.trim()) {
+      showToast('Password saat ini salah! Periksa kembali.', 'alert');
       return;
     }
 
     if (newPass.length < 6) {
-      alert('Password baru minimal 6 karakter!');
+      showToast('Password baru minimal 6 karakter!', 'alert');
       return;
     }
 
     if (newPass !== confirmPass) {
-      alert('Konfirmasi password tidak cocok!');
+      showToast('Konfirmasi password baru tidak cocok!', 'alert');
       return;
     }
 
@@ -845,20 +882,14 @@ export default function AdminPage() {
       setCurrentPass('');
       setNewPass('');
       setConfirmPass('');
-      showToast('Password admin berhasil diperbarui di server Supabase!', 'success');
+      setIsPassVerifiedAndRevealed(false);
+      showToast('Password admin berhasil diperbarui dan tersimpan di Supabase!', 'success');
     } catch (err) {
       console.error('Gagal memperbarui password:', err);
-      alert('Terjadi kesalahan saat menyimpan password ke Supabase.');
+      showToast('Terjadi kesalahan saat menyimpan password ke Supabase.', 'alert');
     } finally {
       setIsChangingPass(false);
     }
-  };
-
-  const toggleSound = () => {
-    const nextState = !soundEnabled;
-    setSoundEnabled(nextState);
-    localStorage.setItem('admin_sound_enabled', String(nextState));
-    showToast(`Suara pemanggilan: ${nextState ? 'AKTIF 🔊' : 'SENYAP 🔇'}`, 'info');
   };
 
   const antreanDitampilkan = daftarAntrean
@@ -885,8 +916,19 @@ export default function AdminPage() {
     });
 
   // -------------------------------------------------------------
-  // RENDER: PANEL LOGIN
+  // RENDER: HYDRATION GUARD & PANEL LOGIN
   // -------------------------------------------------------------
+  if (!isMounted) {
+    return (
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-teal-600 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs font-bold text-slate-400">Memuat Portal Petugas...</p>
+        </div>
+      </main>
+    );
+  }
+
   if (!isLoggedIn) {
     return (
       <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans text-slate-800">
@@ -916,7 +958,7 @@ export default function AdminPage() {
                 value={loginUsername}
                 onChange={(e) => setLoginUsername(e.target.value)}
                 placeholder="admin"
-                className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
+                className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium text-slate-800"
                 required
               />
             </div>
@@ -927,7 +969,7 @@ export default function AdminPage() {
                 value={loginPassword}
                 onChange={(e) => setLoginPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
+                className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium text-slate-800"
                 required
               />
             </div>
@@ -944,7 +986,7 @@ export default function AdminPage() {
               href="/" 
               target="_blank" 
               rel="noopener noreferrer" 
-              className="inline-flex items-center gap-1.5 text-xs text-teal-600 hover:text-teal-800 font-bold transition-colors"
+              className="inline-flex items-center gap-1.5 text-xs text-teal-600 hover:text-teal-700 font-bold transition-colors"
             >
               Buka Layar Pasien (Tab Baru) ↗
             </a>
@@ -958,7 +1000,7 @@ export default function AdminPage() {
   // RENDER: DASHBOARD ADMIN UTAMA
   // -------------------------------------------------------------
   return (
-    <main className="min-h-screen text-slate-800 font-sans pb-20 relative bg-white">
+    <main className="min-h-screen font-sans pb-20 relative bg-gradient-to-b from-slate-50 via-teal-50/20 to-slate-100/70 text-slate-800">
 
       {/* LATAR BELAKANG FOTO PUSKESMAS (Sama seperti halaman pasien) */}
       {fotoPuskesmasUrl ? (
@@ -967,8 +1009,8 @@ export default function AdminPage() {
             className="absolute inset-0 bg-cover bg-center transition-all duration-700 opacity-65 scale-100"
             style={{ backgroundImage: `url("${fotoPuskesmasUrl}")` }}
           />
-          {/* Lapisan overlay putih lembut agar foto terlihat soft dan tulisan sangat jelas */}
-          <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px]" />
+          {/* Lapisan overlay lembut putih bersih */}
+          <div className="absolute inset-0 bg-white/75 backdrop-blur-[1px]" />
         </div>
       ) : null}
 
@@ -989,98 +1031,167 @@ export default function AdminPage() {
         </div>
       )}
 
-      <div className="relative z-10 max-w-6xl mx-auto p-4 sm:p-6">
+      <div className="relative z-10 w-full max-w-[1440px] mx-auto p-4 sm:p-6 lg:p-8">
 
-        {/* ================= HEADER ADMIN ================= */}
-        <div className="bg-white p-5 sm:p-6 rounded-3xl shadow-xs border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 overflow-hidden">
-          <div className="flex items-center gap-4 min-w-0">
-            <div className="w-14 h-14 rounded-2xl bg-teal-50 border border-teal-100 text-teal-700 flex items-center justify-center text-3xl font-black shadow-xs shrink-0 overflow-hidden">
+        {/* ================= HEADER ADMIN (Loket Utama + Waktu Realtime) ================= */}
+        <div className="bg-white/95 backdrop-blur-md p-4 sm:p-6 rounded-3xl shadow-sm border border-slate-200/80 mb-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-all w-full overflow-hidden">
+          <div className="flex items-center gap-3.5 sm:gap-4 min-w-0 w-full md:flex-1">
+            <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-teal-50 border border-teal-100 text-teal-700 flex items-center justify-center text-2xl sm:text-3xl font-black shadow-xs shrink-0 overflow-hidden">
               {logoUrl.startsWith('http') || logoUrl.startsWith('data:') ? (
                 <img src={logoUrl} alt="Logo" className="w-full h-full object-cover" />
               ) : (
                 logoUrl || '🏥'
               )}
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap mb-1">
                 <span className="bg-teal-100 text-teal-800 text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider whitespace-nowrap">
                   Panel Loket Utama
                 </span>
-                <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${
-                  statusBuka ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
+                <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap ${
+                  statusBuka ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
                 }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${statusBuka ? 'bg-emerald-600' : 'bg-red-600'}`} />
+                  <span className={`w-1.5 h-1.5 rounded-full ${statusBuka ? 'bg-emerald-600 animate-pulse' : 'bg-rose-600'}`} />
                   {statusBuka ? 'Pendaftaran Buka' : 'Pendaftaran Tutup'}
                 </span>
               </div>
-              <h1 className="text-xl font-black text-slate-900 mt-0.5 truncate">{namaPuskesmas}</h1>
-              <p className="text-xs text-slate-500 truncate">{alamatPuskesmas}</p>
+              <h1 className="text-lg sm:text-xl font-black text-slate-900 truncate leading-tight">{namaPuskesmas}</h1>
+              <p className="text-xs text-slate-500 line-clamp-1 sm:truncate max-w-full break-all sm:break-normal">{alamatPuskesmas}</p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          {/* SISI KANAN CARD LOKET UTAMA: WAKTU REALTIME */}
+          <div className="flex items-center gap-3 shrink-0 w-full md:w-auto bg-slate-50 border border-slate-200/80 px-4 py-3 rounded-2xl shadow-2xs">
+            <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0 border border-teal-100/60">
+              <Clock className="w-5 h-5 animate-pulse text-teal-600" />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Waktu</p>
+              <p className="text-xs sm:text-sm font-black font-mono text-slate-800 tracking-tight">
+                {realtimeClock || '--:--:-- WIB'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* ================= 1 CARD PANJANG MENU AKSI CEPAT (MODERN & TERSTRUKTUR) ================= */}
+        <div className="bg-white/95 backdrop-blur-md p-3 sm:p-4 rounded-3xl shadow-sm border border-slate-200/80 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-4">
             
-            {/* Jam Digital Realtime */}
-            {realtimeClock && (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 text-slate-800 text-xs font-bold border border-slate-200 shadow-2xs">
-                <Clock className="w-3.5 h-3.5 text-teal-600 animate-pulse" />
-                <span>{realtimeClock}</span>
-              </div>
-            )}
-
-            {/* Toggle Suara Admin */}
+            {/* 1. Suara On / Suara Off */}
             <button
+              type="button"
               onClick={toggleSound}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`p-3 sm:p-4 rounded-2xl transition-all cursor-pointer border flex flex-col sm:flex-row items-center sm:items-center text-center sm:text-left gap-2 sm:gap-3 group shadow-xs hover:shadow-md ${
                 soundEnabled
-                  ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
-                  : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                  ? 'bg-gradient-to-br from-teal-50 to-emerald-50/60 border-teal-200 text-teal-950'
+                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
               }`}
-              title="Toggle Suara Pemanggilan"
             >
-              {soundEnabled ? <Volume2 className="w-3.5 h-3.5 text-blue-600" /> : <VolumeX className="w-3.5 h-3.5 text-slate-400" />}
-              <span>{soundEnabled ? 'Suara: ON' : 'Suara: OFF'}</span>
+              <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${
+                soundEnabled ? 'bg-teal-600 text-white shadow-xs shadow-teal-500/30' : 'bg-slate-200 text-slate-500'
+              }`}>
+                {soundEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-xs sm:text-sm font-black break-words whitespace-normal leading-tight block">
+                  {soundEnabled ? 'Suara Aktif' : 'Suara Senyap'}
+                </span>
+                <p className="hidden sm:block text-[11px] text-slate-500 truncate mt-0.5">
+                  {soundEnabled ? 'Bunyikan TTS loket' : 'Mode hening panggilan'}
+                </p>
+              </div>
             </button>
 
-            {/* Tombol Install App PWA Admin */}
-            <button
-              onClick={handleInstallAdminApp}
-              className="bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold px-3 py-1.5 rounded-xl border border-teal-200 transition-all cursor-pointer flex items-center gap-1"
-              title="Pasang Aplikasi Web Loket di Desktop/HP"
-            >
-              <Smartphone className="w-3.5 h-3.5 text-teal-600" />
-              <span>{isAdminAppInstalled ? 'PWA Terpasang' : 'Pasang App'}</span>
-            </button>
-
-            {/* Buka Layar Pasien di TAB BARU */}
+            {/* 2. Layar Pasien */}
             <a
               href="/"
               target="_blank"
               rel="noopener noreferrer"
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer"
+              className="p-3 sm:p-4 rounded-2xl transition-all cursor-pointer border border-slate-200 bg-slate-50 hover:bg-teal-50/70 hover:border-teal-200 text-slate-800 flex flex-col sm:flex-row items-center sm:items-center text-center sm:text-left gap-2 sm:gap-3 group shadow-xs hover:shadow-md"
             >
-              Layar Pasien ↗
+              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-teal-50 text-teal-600 border border-teal-100 flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-2xs">
+                <ExternalLink className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-xs sm:text-sm font-black break-words whitespace-normal leading-tight block">
+                  Layar Pasien
+                </span>
+                <p className="hidden sm:block text-[11px] text-slate-500 truncate mt-0.5">
+                  Buka tab antrean baru ↗
+                </p>
+              </div>
             </a>
 
-            {/* Logout */}
+            {/* 3. Pasang Aplikasi */}
             <button
-              onClick={() => {
-                setIsLoggedIn(false);
-                sessionStorage.removeItem('admin_is_logged_in');
-              }}
-              className="bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold px-3 py-1.5 rounded-xl border border-rose-200 transition-all cursor-pointer flex items-center gap-1"
+              type="button"
+              onClick={handleInstallAdminApp}
+              className="p-3 sm:p-4 rounded-2xl transition-all cursor-pointer border border-slate-200 bg-slate-50 hover:bg-teal-50/70 hover:border-teal-200 text-slate-800 flex flex-col sm:flex-row items-center sm:items-center text-center sm:text-left gap-2 sm:gap-3 group shadow-xs hover:shadow-md"
             >
-              <LogOut className="w-3.5 h-3.5" /> Keluar
+              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-teal-50 text-teal-600 border border-teal-100 flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-2xs">
+                <Smartphone className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-xs sm:text-sm font-black break-words whitespace-normal leading-tight block">
+                  {isAdminAppInstalled ? 'Aplikasi Terpasang' : 'Pasang Aplikasi'}
+                </span>
+                <p className="hidden sm:block text-[11px] text-slate-500 truncate mt-0.5">
+                  Aplikasi mandiri loket
+                </p>
+              </div>
             </button>
+
+            {/* 4. Layar Display */}
+            <a
+              href="/display"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-3 sm:p-4 rounded-2xl transition-all cursor-pointer border border-slate-200 bg-slate-50 hover:bg-violet-50/70 hover:border-violet-200 text-slate-800 flex flex-col sm:flex-row items-center sm:items-center text-center sm:text-left gap-2 sm:gap-3 group shadow-xs hover:shadow-md"
+            >
+              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-violet-50 text-violet-600 border border-violet-100 flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-2xs">
+                <ExternalLink className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-xs sm:text-sm font-black break-words whitespace-normal leading-tight block">
+                  Layar Display
+                </span>
+                <p className="hidden sm:block text-[11px] text-slate-500 truncate mt-0.5">
+                  Tampilan TV / monitor publik ↗
+                </p>
+              </div>
+            </a>
+
+            {/* 5. Keluar */}
+            <button
+              type="button"
+              onClick={() => setShowLogoutModal(true)}
+              className="p-3 sm:p-4 rounded-2xl transition-all cursor-pointer border border-rose-200/80 bg-rose-50/60 hover:bg-rose-100/80 text-rose-900 flex flex-col sm:flex-row items-center sm:items-center text-center sm:text-left gap-2 sm:gap-3 group shadow-xs hover:shadow-md"
+            >
+              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-rose-100 text-rose-600 border border-rose-200 flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 shadow-2xs">
+                <LogOut className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-xs sm:text-sm font-black break-words whitespace-normal leading-tight block">
+                  Keluar Akun
+                </span>
+                <p className="hidden sm:block text-[11px] text-rose-600/80 truncate mt-0.5">
+                  Akhiri sesi petugas
+                </p>
+              </div>
+            </button>
+
           </div>
         </div>
 
         {/* ================= TAB MENU (RINGKAS: KELOLA ANTREAN) ================= */}
-        <div className="flex bg-white p-1.5 rounded-2xl shadow-xs border border-slate-200 mb-6 gap-1 overflow-x-auto">
+        <div className="flex bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xs border border-slate-200/80 mb-6 gap-1 overflow-x-auto">
           <button
             onClick={() => setActiveMenu('antrean')}
             className={`flex-1 py-2.5 px-4 text-xs font-bold rounded-xl transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
-              activeMenu === 'antrean' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              activeMenu === 'antrean' 
+                ? 'bg-teal-600 text-white shadow-sm' 
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <Users className="w-4 h-4" /> Kelola Antrean
@@ -1088,7 +1199,9 @@ export default function AdminPage() {
           <button
             onClick={() => setActiveMenu('profil')}
             className={`flex-1 py-2.5 px-4 text-xs font-bold rounded-xl transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
-              activeMenu === 'profil' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              activeMenu === 'profil' 
+                ? 'bg-teal-600 text-white shadow-sm' 
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <Settings className="w-4 h-4" /> Media & Profil Puskesmas
@@ -1096,7 +1209,9 @@ export default function AdminPage() {
           <button
             onClick={() => setActiveMenu('laporan')}
             className={`flex-1 py-2.5 px-4 text-xs font-bold rounded-xl transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
-              activeMenu === 'laporan' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              activeMenu === 'laporan' 
+                ? 'bg-teal-600 text-white shadow-sm' 
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <Download className="w-4 h-4" /> Ekspor CSV / Excel
@@ -1104,7 +1219,9 @@ export default function AdminPage() {
           <button
             onClick={() => setActiveMenu('sandi')}
             className={`flex-1 py-2.5 px-4 text-xs font-bold rounded-xl transition-all whitespace-nowrap cursor-pointer flex items-center justify-center gap-1.5 ${
-              activeMenu === 'sandi' ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              activeMenu === 'sandi' 
+                ? 'bg-teal-600 text-white shadow-sm' 
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <Key className="w-4 h-4" /> Ganti Sandi
@@ -1132,7 +1249,7 @@ export default function AdminPage() {
                       </h3>
                       <p className="text-xs text-teal-200">
                         {pasienTeratas 
-                          ? `Status: ${pasienTeratas.status} • Panggilan: ${pasienTeratas.panggilan_ke || 0}/3 (Ke-4 Lewati)`
+                          ? `Status: ${pasienTeratas.status} • Panggilan: ${pasienTeratas.panggilan_ke || 0}/3`
                           : isSiklusTutupAtauKosong 
                           ? 'Siklus antrean hari ini telah ditutup atau selesai.'
                           : 'Belum ada pendaftaran baru.'}
@@ -1168,7 +1285,7 @@ export default function AdminPage() {
                   <Volume2 className="w-6 h-6 text-blue-200" />
                   <span className="font-extrabold text-sm">Panggil Pasien</span>
                   <span className="text-[11px] text-blue-200">
-                    {pasienTeratas ? `Panggilan ${pasienTeratas.panggilan_ke || 0}/3 (Ke-4 Lewati)` : 'Tidak ada pasien'}
+                    {pasienTeratas ? `Panggilan ${pasienTeratas.panggilan_ke || 0}/3` : 'Tidak ada pasien'}
                   </span>
                 </button>
 
@@ -1210,7 +1327,7 @@ export default function AdminPage() {
             </div>
 
             {/* ================= TABEL ANTREAN REALTIME ================= */}
-            <div className="bg-white rounded-3xl shadow-xs border border-slate-200 p-5 sm:p-6">
+            <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-xs border border-slate-200/80 p-5 sm:p-6">
               
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-5">
                 <div className="relative flex-1 w-full sm:max-w-xs">
@@ -1220,7 +1337,7 @@ export default function AdminPage() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Cari nama atau nomor..."
-                    className="w-full pl-9 pr-4 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    className="w-full pl-9 pr-4 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-800"
                   />
                 </div>
 
@@ -1230,7 +1347,9 @@ export default function AdminPage() {
                       key={st}
                       onClick={() => setFilterStatus(st)}
                       className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                        filterStatus === st ? 'bg-white text-teal-800 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+                        filterStatus === st 
+                          ? 'bg-white text-teal-800 shadow-xs' 
+                          : 'text-slate-500 hover:text-slate-800'
                       }`}
                     >
                       {st}
@@ -1251,12 +1370,12 @@ export default function AdminPage() {
                       key={item.id}
                       className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 min-w-0 ${
                         item.status === 'MEMANGGIL'
-                          ? 'bg-blue-50/60 border-blue-300 ring-2 ring-blue-200'
+                          ? 'bg-blue-50/70 border-blue-300 ring-2 ring-blue-100'
                           : item.status === 'TERLAMBAT'
-                          ? 'bg-amber-50/40 border-amber-200'
+                          ? 'bg-amber-50/60 border-amber-200'
                           : item.status === 'SELESAI'
                           ? 'bg-slate-50 border-slate-200 opacity-60'
-                          : 'bg-white border-slate-200/80 hover:border-slate-300'
+                          : 'bg-white border-slate-200/80 hover:border-teal-200 shadow-2xs'
                       }`}
                     >
                       <div className="flex items-center gap-3.5 min-w-0 flex-1">
@@ -1312,203 +1431,602 @@ export default function AdminPage() {
 
         {/* ================= TAB 2: KUSTOMISASI MEDIA, GPS & PENGUMUMAN ================= */}
         {activeMenu === 'profil' && (
-          <div className="bg-white rounded-3xl shadow-xs border border-slate-200 p-6 space-y-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center">
-                <Settings className="w-5 h-5" />
+          <form onSubmit={handleSimpanPengaturan} className="space-y-6 animate-fade-in w-full">
+            
+            {/* Header Pengantar Tab 2 */}
+            <div className="bg-white/95 backdrop-blur-md rounded-3xl p-5 sm:p-6 shadow-sm border border-slate-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0 border border-teal-100 shadow-2xs">
+                  <Settings className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="font-black text-slate-900 text-lg">Profil, Media & Pengumuman Instansi</h2>
+                  <p className="text-xs text-slate-400">Pengaturan identitas, media visual, dan navigasi GPS yang tersinkron otomatis ke seluruh pasien.</p>
+                </div>
               </div>
-              <div>
-                <h2 className="font-bold text-slate-900 text-base">Profil, Media & Pengumuman Puskesmas</h2>
-                <p className="text-xs text-slate-400">Pengaturan ini tersinkronisasi secara real-time ke layar seluruh pasien.</p>
+
+              {/* Tombol Simpan Cepat di Header */}
+              <div className="flex items-center gap-2 self-stretch sm:self-auto justify-end">
+                <button
+                  type="submit"
+                  className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-5 py-2.5 rounded-2xl text-xs shadow-md shadow-teal-600/20 transition-all cursor-pointer flex items-center gap-2"
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Simpan Perubahan
+                </button>
               </div>
             </div>
 
-            <form onSubmit={handleSimpanPengaturan} className="space-y-5">
+            {/* Layout 2 Kolom Seimbang (Desktop 12 Kolom, Mobile Stack) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               
-              {/* Profil Teks */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                    Nama Puskesmas
-                  </label>
-                  <input
-                    type="text"
-                    value={namaPuskesmas}
-                    onChange={(e) => setNamaPuskesmas(e.target.value)}
-                    className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                    Alamat Lengkap
-                  </label>
-                  <input
-                    type="text"
-                    value={alamatPuskesmas}
-                    onChange={(e) => setAlamatPuskesmas(e.target.value)}
-                    className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Upload Logo Puskesmas */}
-              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                  Logo Puskesmas (Emoji / URL / Upload File)
-                </label>
-                <div className="flex items-center gap-3">
-                  <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-2xl overflow-hidden shrink-0">
-                    {logoUrl.startsWith('http') || logoUrl.startsWith('data:') ? (
-                      <img src={logoUrl} alt="Preview" className="w-full h-full object-contain p-1" />
-                    ) : (
-                      logoUrl || '🏥'
-                    )}
+              {/* ================= KOLOM KIRI (5 KOLOM): PRATINJAU LANGSUNG (LIVE PREVIEW) ================= */}
+              <div className="lg:col-span-5 space-y-5">
+                
+                {/* Card Live Preview Pasien */}
+                <div className="bg-white/95 backdrop-blur-md rounded-3xl p-5 sm:p-6 shadow-sm border border-slate-200/80 relative overflow-hidden">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <Eye className="w-4 h-4 text-teal-600" />
+                      Pratinjau Layar Pasien (Live)
+                    </span>
+                    <span className="text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-full">
+                      Tampilan Nyata
+                    </span>
                   </div>
-                  <div className="flex-1 space-y-2">
-                    <input
-                      type="text"
-                      value={logoUrl}
-                      onChange={(e) => setLogoUrl(e.target.value)}
-                      placeholder="Emoji 🏥 atau URL gambar..."
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-medium"
-                    />
-                    <label className="inline-flex items-center gap-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold px-3 py-1.5 rounded-xl cursor-pointer transition-colors">
-                      <Upload className="w-3.5 h-3.5" /> Unggah File Logo
-                      <input type="file" accept="image/*" onChange={(e) => handleFileUpload(e, setLogoUrl)} className="hidden" />
-                    </label>
-                  </div>
-                </div>
-              </div>
 
-              {/* Upload Foto Latar Belakang Puskesmas */}
-              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-                  Foto Latar Belakang Puskesmas (Tampil di Layar Pasien)
-                </label>
-                <div className="flex items-center gap-3">
-                  <div className="w-24 h-16 rounded-2xl bg-white border border-slate-200 overflow-hidden shrink-0">
-                    {fotoPuskesmasUrl ? (
-                      <img src={fotoPuskesmasUrl} alt="Latar Belakang" className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full bg-slate-100 flex items-center justify-center text-[10px] text-slate-400">
-                        Belum Ada
+                  {/* Frame Simulasi Layar Pasien Nyata (1:1 Sinkron Web Pasien) */}
+                  <div className="rounded-2xl border border-slate-200/90 overflow-hidden bg-slate-100 relative shadow-md">
+                    {/* Browser / Device Chrome Header */}
+                    <div className="bg-slate-200/90 px-3.5 py-2 border-b border-slate-300/70 flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-rose-400" />
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
                       </div>
+                      <div className="flex-1 bg-white/90 rounded-md px-2.5 py-0.5 text-[10px] text-slate-500 font-mono flex items-center justify-between border border-slate-200/60 shadow-2xs">
+                        <span className="truncate">antrean-puskesmas.web.app (Layar Pasien)</span>
+                        <span className="text-[9px] font-bold text-teal-600 uppercase tracking-wider">LIVE</span>
+                      </div>
+                    </div>
+
+                    {/* Viewport Layar Pasien */}
+                    <div className="relative p-3.5 sm:p-4 min-h-[360px] flex flex-col justify-start overflow-hidden bg-gradient-to-b from-slate-50 via-teal-50/20 to-slate-100/70">
+                      {/* Latar Belakang Foto Jelas */}
+                      {fotoPuskesmasUrl ? (
+                        <div className="absolute inset-0 pointer-events-none z-0 overflow-hidden">
+                          <img 
+                            src={fotoPuskesmasUrl} 
+                            alt="Foto Latar Puskesmas" 
+                            className="w-full h-full object-cover object-center scale-100 transition-transform duration-700" 
+                          />
+                          <div className="absolute inset-0 bg-white/75 backdrop-blur-[1px]" />
+                        </div>
+                      ) : null}
+
+                      {/* Banner Pengumuman Darurat (Sinkron Pasien) */}
+                      {pengumumanDarurat && (
+                        <aside className="relative z-10 bg-red-600 text-white px-3 py-2 rounded-xl shadow-xs mb-3 flex items-center gap-2 text-xs font-bold animate-pulse">
+                          <AlertCircle className="w-4 h-4 text-amber-200 shrink-0" />
+                          <div className="flex-1 text-[11px] leading-tight">
+                            <span className="uppercase tracking-wider font-extrabold text-amber-200 mr-1">PENGUMUMAN:</span>
+                            {pengumumanDarurat}
+                          </div>
+                        </aside>
+                      )}
+
+                      {/* Card Profil Pasien (Persis 1:1 Dengan Web Pasien - Card Kepala dengan Foto Jelas) */}
+                      <div className={`relative z-10 rounded-2xl p-4 sm:p-5 border shadow-md text-center overflow-hidden transition-all ${
+                        fotoPuskesmasUrl 
+                          ? 'border-slate-800/20 shadow-slate-900/10' 
+                          : 'bg-white/95 backdrop-blur-md border-slate-200/80 shadow-slate-200/50'
+                      }`}>
+                        {/* Latar Belakang Foto Pada Card Kepala (JELAS, TANPA LAPISAN PUTIH OPACITY) */}
+                        {fotoPuskesmasUrl ? (
+                          <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+                            <img 
+                              src={fotoPuskesmasUrl} 
+                              alt="Latar Card Kepala" 
+                              className="w-full h-full object-cover object-center" 
+                            />
+                            {/* Gradasi gelap lembut di bawah agar foto tetap tampil tajam 100% dan teks putih terbaca sangat kontras */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/45 to-slate-950/20" />
+                          </div>
+                        ) : null}
+
+                        {/* Top gradient line */}
+                        <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-teal-400 via-emerald-400 to-teal-500 z-10" />
+                        
+                        {/* Logo Puskesmas */}
+                        <div className="relative z-10 inline-flex items-center justify-center w-16 h-16 rounded-2xl border border-white/80 bg-white/95 text-teal-600 shadow-md mb-2.5 overflow-hidden">
+                          {logoUrl && (logoUrl.startsWith('http') || logoUrl.startsWith('data:')) ? (
+                            <img src={logoUrl} alt="Logo Pelayanan" className="w-13 h-13 object-contain rounded-xl p-0.5" />
+                          ) : (
+                            <span className="text-3xl">{logoUrl || '🏥'}</span>
+                          )}
+                        </div>
+
+                        {/* Nama Puskesmas */}
+                        <h4 className={`relative z-10 text-base sm:text-lg font-black tracking-tight leading-snug ${
+                          fotoPuskesmasUrl ? 'text-white drop-shadow-md' : 'text-slate-900'
+                        }`}>
+                          {namaPuskesmas || 'Nama Puskesmas Belum Diatur'}
+                        </h4>
+
+                        {/* Alamat Puskesmas */}
+                        <p className={`relative z-10 text-[11px] sm:text-xs mt-1 max-w-xs mx-auto leading-relaxed font-medium ${
+                          fotoPuskesmasUrl ? 'text-slate-200 drop-shadow-xs' : 'text-slate-500'
+                        }`}>
+                          {alamatPuskesmas || 'Alamat Belum Diatur'}
+                        </p>
+
+                        {/* Status Loket Badge */}
+                        <div className={`relative z-10 mt-3.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold border backdrop-blur-md shadow-2xs ${
+                          fotoPuskesmasUrl 
+                            ? 'bg-white/95 border-white/60 text-slate-800' 
+                            : 'bg-slate-50 border-slate-200/80 text-slate-800'
+                        }`}>
+                          <span className={`w-2.5 h-2.5 rounded-full ${statusBuka ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`} />
+                          <span className={statusBuka ? 'text-emerald-700' : 'text-rose-700'}>
+                            {statusBuka ? 'Loket Pelayanan Buka' : 'Loket Pelayanan Ditutup'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Mini Tab & Navigasi Mockup Pasien */}
+                      <div className="relative z-10 mt-3 flex bg-slate-200/80 p-1 rounded-xl border border-slate-200/90 shadow-2xs">
+                        <div className="flex-1 py-1.5 text-center text-[10px] font-bold rounded-lg bg-white text-teal-800 shadow-2xs flex items-center justify-center gap-1">
+                          <span>🎫 Ambil Antrean</span>
+                        </div>
+                        <div className="flex-1 py-1.5 text-center text-[10px] font-bold rounded-lg text-slate-600 flex items-center justify-center gap-1">
+                          <span>🔍 Cek Antrean</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400 mt-3 text-center leading-relaxed">
+                    Setiap perubahan di formulir sebelah kanan akan langsung terlihat pada pratinjau ini sebelum disimpan ke server.
+                  </p>
+                </div>
+
+                {/* Card Panduan & Rekomendasi Media */}
+                <div className="bg-slate-50 rounded-3xl p-5 border border-slate-200/80 space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    <Sparkles className="w-4 h-4 text-teal-600" />
+                    Panduan & Rekomendasi Media
+                  </div>
+                  <ul className="text-xs text-slate-600 space-y-2 leading-relaxed">
+                    <li className="flex items-start gap-2">
+                      <span className="text-teal-600 font-bold">•</span>
+                      <span><strong>Logo:</strong> Gunakan gambar transparan berformat PNG aspek rasio 1:1 (persegi) agar simetris.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-teal-600 font-bold">•</span>
+                      <span><strong>Foto Latar:</strong> Gunakan foto gedung/layanan berformat JPG/WebP lanskap (16:9) beresolusi minimal 1280x720.</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-teal-600 font-bold">•</span>
+                      <span><strong>Koordinat GPS:</strong> Pastikan latitude & longitude akurat agar estimasi rute OSRM pasien tidak meleset.</span>
+                    </li>
+                  </ul>
+                </div>
+
+              </div>
+
+              {/* ================= KOLOM KANAN (7 KOLOM): FORMULIR PENGATURAN TERSTRUKTUR ================= */}
+              <div className="lg:col-span-7 space-y-5">
+                
+                {/* 1. SEKSI IDENTITAS PUSKESMAS */}
+                <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-sm border border-slate-200/80 p-5 sm:p-6 space-y-4">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+                    <span className="w-2 h-2 rounded-full bg-teal-500" />
+                    <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                      1. Identitas & Informasi Instansi
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                        Nama Puskesmas / Instansi
+                      </label>
+                      <input
+                        type="text"
+                        value={namaPuskesmas}
+                        onChange={(e) => setNamaPuskesmas(e.target.value)}
+                        placeholder="Contoh: Puskesmas Kuala Cenaku"
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium text-slate-800"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                        Alamat Lengkap
+                      </label>
+                      <input
+                        type="text"
+                        value={alamatPuskesmas}
+                        onChange={(e) => setAlamatPuskesmas(e.target.value)}
+                        placeholder="Contoh: Jl. Kesehatan No. 1, Kuala Cenaku"
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium text-slate-800"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                      Persyaratan Wajib Pasien (KTP/KK Fisik)
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={infoPenting}
+                      onChange={(e) => setInfoPenting(e.target.value)}
+                      placeholder="Contoh: Wajib membawa KTP atau KK fisik saat datang ke loket..."
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium text-slate-800 leading-relaxed"
+                    />
+                  </div>
+                </div>
+
+                {/* 2. SEKSI MEDIA VISUAL (LOGO & FOTO BACKGROUND) */}
+                <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-sm border border-slate-200/80 p-5 sm:p-6 space-y-4">
+                  <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+                    <span className="w-2 h-2 rounded-full bg-blue-500" />
+                    <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                      2. Media Visual (Logo & Foto Background)
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Upload Logo (Proposional & Simetris) */}
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex flex-col justify-between gap-3">
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Logo Instansi</span>
+                          {logoUrl && logoUrl !== '🏥' ? (
+                            <span className="text-[10px] font-bold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-teal-600" /> Logo Khusus
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                              Ikon Standar
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Kotak Preview Logo Proposional */}
+                        <div className="w-full h-32 sm:h-36 rounded-xl bg-white border border-slate-200 overflow-hidden relative shadow-inner flex flex-col items-center justify-center p-3 group">
+                          {logoUrl && (logoUrl.startsWith('http') || logoUrl.startsWith('data:')) ? (
+                            <>
+                              <div className="flex-1 flex items-center justify-center w-full">
+                                <img 
+                                  src={logoUrl} 
+                                  alt="Preview Logo" 
+                                  className="max-w-[120px] max-h-[75px] w-auto h-auto object-contain drop-shadow-sm group-hover:scale-105 transition-transform duration-300" 
+                                />
+                              </div>
+                              <span className="text-[10px] font-medium text-slate-400 mt-1">
+                                Format Transparan PNG / JPG • Rasio 1:1
+                              </span>
+                            </>
+                          ) : (
+                            <div className="flex flex-col items-center justify-center text-center">
+                              <span className="text-4xl sm:text-5xl mb-1 drop-shadow-xs">{logoUrl || '🏥'}</span>
+                              <span className="text-[10px] font-medium text-slate-400">
+                                Ikon Standar • Disarankan format PNG 1:1
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-200/60">
+                        <label className="flex-1 inline-flex items-center justify-center gap-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold py-2.5 px-3 rounded-xl cursor-pointer transition-colors shadow-2xs">
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{logoUrl && logoUrl !== '🏥' ? 'Ganti Logo' : 'Unggah Logo'}</span>
+                          <input type="file" accept="image/*" onChange={(e) => handleFileUpload(e, setLogoUrl)} className="hidden" />
+                        </label>
+                        {logoUrl && logoUrl !== '🏥' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLogoUrl('🏥');
+                              showToast('Logo direset ke ikon standar 🏥', 'info');
+                            }}
+                            className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold py-2.5 px-3.5 rounded-xl transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Reset</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Upload Background Foto */}
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex flex-col justify-between gap-3">
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Foto Latar Belakang</span>
+                          {fotoPuskesmasUrl ? (
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Foto Jelas & Aktif
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-full">
+                              Belum Ada Foto
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Foto Preview Jelas */}
+                        <div className="w-full h-32 sm:h-36 rounded-xl bg-slate-100 border border-slate-200 overflow-hidden relative shadow-inner group">
+                          {fotoPuskesmasUrl ? (
+                            <>
+                              <img 
+                                src={fotoPuskesmasUrl} 
+                                alt="Latar Belakang Puskesmas" 
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
+                              />
+                              <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent flex items-end p-2.5">
+                                <span className="text-[10px] font-bold text-white drop-shadow-xs">
+                                  Format Lanskap 16:9 (Foto Jelas)
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-3 text-center">
+                              <Upload className="w-6 h-6 text-slate-300 mb-1" />
+                              <p className="text-xs font-bold text-slate-500">Belum Ada Foto Latar</p>
+                              <p className="text-[10px] text-slate-400 mt-0.5">Unggah foto gedung puskesmas untuk latar belakang pasien</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-200/60">
+                        <label className="flex-1 inline-flex items-center justify-center gap-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold py-2.5 px-3 rounded-xl cursor-pointer transition-colors shadow-2xs">
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>{fotoPuskesmasUrl ? 'Ganti Foto Latar' : 'Unggah Foto Latar'}</span>
+                          <input type="file" accept="image/*" onChange={(e) => handleFileUpload(e, setFotoPuskesmasUrl)} className="hidden" />
+                        </label>
+                        {fotoPuskesmasUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFotoPuskesmasUrl('');
+                              showToast('Foto latar belakang dihapus.', 'info');
+                            }}
+                            className="bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold py-2.5 px-3.5 rounded-xl border border-rose-200 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            <span>Hapus</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. SEKSI LOKASI SPASIAL (GOOGLE MAPS & OSRM) */}
+                <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-sm border border-slate-200/80 p-5 sm:p-6 space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                        3. Lokasi Google Maps & Koordinat OSRM
+                      </h3>
+                    </div>
+                    {mapsUrl && (
+                      <a
+                        href={mapsUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1"
+                      >
+                        Buka Maps ↗
+                      </a>
                     )}
                   </div>
-                  <div className="flex-1 space-y-2">
-                    <input
-                      type="text"
-                      value={fotoPuskesmasUrl}
-                      onChange={(e) => setFotoPuskesmasUrl(e.target.value)}
-                      placeholder="URL Foto Puskesmas..."
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-medium"
-                    />
-                    <label className="inline-flex items-center gap-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold px-3 py-1.5 rounded-xl cursor-pointer transition-colors">
-                      <Upload className="w-3.5 h-3.5" /> Unggah Foto Latar Belakang
-                      <input type="file" accept="image/*" onChange={(e) => handleFileUpload(e, setFotoPuskesmasUrl)} className="hidden" />
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                      URL / Link Google Maps Loket
                     </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={mapsUrl}
+                        onChange={(e) => handleMapsUrlChange(e.target.value)}
+                        placeholder="Contoh: https://maps.google.com/?q=-0.5282,102.5853"
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500 pl-10"
+                      />
+                      <MapPin className="w-4 h-4 text-teal-600 absolute left-3.5 top-3.5" />
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Mendukung format link Google Maps biasa ataupun link pendek (maps.app.goo.gl). Koordinat akan diekstrak otomatis.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Latitude (Garis Lintang)
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={latitude}
+                        onChange={(e) => setLatitude(parseFloat(e.target.value))}
+                        className="w-full px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Longitude (Garis Bujur)
+                      </label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={longitude}
+                        onChange={(e) => setLongitude(parseFloat(e.target.value))}
+                        className="w-full px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Integrasi Google Maps & Koordinat OSRM */}
-              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  <MapPin className="w-4 h-4 text-blue-600" />
-                  Lokasi Google Maps & Koordinat
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-500 mb-1">
-                    Link Google Maps (Mendukung link maps.google.com atau maps.app.goo.gl)
-                  </label>
+                {/* 4. SEKSI PENGUMUMAN DARURAT (LIVE DI LAYAR PASIEN) */}
+                <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-sm border border-rose-200 p-5 sm:p-6 space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-rose-100">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                      <h3 className="text-xs font-black text-rose-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <Bell className="w-4 h-4 text-rose-600" />
+                        4. Banner Pengumuman Darurat (Live)
+                      </h3>
+                    </div>
+                    {pengumumanDarurat && (
+                      <button
+                        type="button"
+                        onClick={handleHapusPengumumanDarurat}
+                        className="bg-rose-100 hover:bg-rose-200 text-rose-700 text-[11px] font-bold px-3 py-1.5 rounded-xl cursor-pointer flex items-center gap-1 transition-colors"
+                      >
+                        <XCircle className="w-3.5 h-3.5" /> Hapus Banner
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Pengumuman darurat akan muncul sebagai pita merah tebal di bagian atas layar seluruh pasien secara real-time. Kosongkan jika tidak ada kendala darurat.
+                  </p>
+
                   <input
                     type="text"
-                    value={mapsUrl}
-                    onChange={(e) => handleMapsUrlChange(e.target.value)}
-                    placeholder="https://maps.google.com/?q=-0.5282,102.5853"
-                    className="w-full px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-xs font-medium"
+                    value={pengumumanDarurat}
+                    onChange={(e) => setPengumumanDarurat(e.target.value)}
+                    placeholder="Contoh: Loket pendaftaran tutup jam 11:30 WIB karena rapat koordinasi dinas..."
+                    className="w-full px-4 py-3 rounded-2xl bg-rose-50/50 border border-rose-200 text-xs sm:text-sm font-medium text-rose-950 placeholder-rose-300 focus:outline-none focus:ring-2 focus:ring-rose-500"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 mb-1">Latitude (Lat)</label>
-                    <input
-                      type="number"
-                      step="any"
-                      value={latitude}
-                      onChange={(e) => setLatitude(parseFloat(e.target.value))}
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 mb-1">Longitude (Lon)</label>
-                    <input
-                      type="number"
-                      step="any"
-                      value={longitude}
-                      onChange={(e) => setLongitude(parseFloat(e.target.value))}
-                      className="w-full px-3 py-2 rounded-xl bg-white border border-slate-200 text-xs font-medium"
-                    />
-                  </div>
-                </div>
-              </div>
 
-              {/* Informasi Penting Syarat Pasien */}
-              <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                  Informasi Penting Syarat Pasien (KTP/KK Fisik)
-                </label>
-                <textarea
-                  rows={2}
-                  value={infoPenting}
-                  onChange={(e) => setInfoPenting(e.target.value)}
-                  className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
-                />
-              </div>
+                {/* 5. SEKSI LAYAR DISPLAY PUBLIK (/display) */}
+                <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-sm border border-violet-200/80 p-5 sm:p-6 space-y-4">
+                  <div className="flex items-center gap-2 pb-3 border-b border-violet-100">
+                    <span className="w-2 h-2 rounded-full bg-violet-500" />
+                    <h3 className="text-xs font-black text-violet-800 uppercase tracking-wider flex items-center gap-1.5">
+                      5. Pengaturan Layar Display Publik (/display)
+                    </h3>
+                  </div>
 
-              {/* Pengumuman Darurat */}
-              <div className="bg-red-50/80 border border-red-200 rounded-2xl p-5">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-red-700 font-black text-xs uppercase tracking-wider flex items-center gap-1.5">
-                    <Bell className="w-4 h-4 text-red-600" />
-                    Pengumuman Darurat (Tampil Live di Layar Pasien)
-                  </span>
-                  {pengumumanDarurat && (
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Layar display publik untuk TV / monitor di ruang tunggu. QR code di layar display akan mengarah ke link yang diisi di bawah. Kosongkan untuk otomatis menggunakan URL web pasien ({typeof window !== 'undefined' ? window.location.origin + '/' : '/'}).
+                  </p>
+
+                  {/* Link Custom QR */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      Link untuk QR Code Display
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="url"
+                        value={displayQrLink}
+                        onChange={(e) => setDisplayQrLink(e.target.value)}
+                        placeholder={`Kosongkan = otomatis (${typeof window !== 'undefined' ? window.location.origin + '/' : '/'})`}
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500 pl-10"
+                      />
+                      <QrCode className="w-4 h-4 text-violet-500 absolute left-3.5 top-3.5" />
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Contoh: <span className="font-mono text-violet-600">https://antrean-puskesmas.web.app/</span> — isi link web pasien atau link khusus bisnis lainnya.
+                    </p>
+                  </div>
+
+                  {/* Preview QR */}
+                  {(displayQrLink || typeof window !== 'undefined') && (
+                    <div className="flex items-center gap-4 p-4 bg-violet-50/60 border border-violet-200/60 rounded-2xl">
+                      <div className="shrink-0">
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=${encodeURIComponent(displayQrLink || (typeof window !== 'undefined' ? window.location.origin + '/' : '/'))}&margin=4&color=5b21b6&bgcolor=ffffff&format=svg`}
+                          alt="Preview QR"
+                          width={80}
+                          height={80}
+                          className="rounded-xl border border-violet-200 bg-white"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-violet-800 mb-0.5">Pratinjau QR Code</p>
+                        <p className="text-[11px] text-violet-600 font-mono break-all leading-snug">
+                          {displayQrLink || (typeof window !== 'undefined' ? window.location.origin + '/' : '/')}
+                        </p>
+                        <a
+                          href="/display"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 mt-1.5 text-[11px] font-bold text-violet-700 underline underline-offset-2 hover:text-violet-900"
+                        >
+                          <ExternalLink className="w-3 h-3" /> Buka Layar Display ↗
+                        </a>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Toggle Suara Display */}
+                  <div className="flex items-center justify-between p-4 bg-slate-50 border border-slate-200/80 rounded-2xl">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${displaySoundEnabled ? 'bg-violet-100 text-violet-700' : 'bg-slate-200 text-slate-500'}`}>
+                        {displaySoundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-800">Suara Notifikasi Layar Display</p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {displaySoundEnabled
+                            ? 'Chime medis akan berbunyi otomatis di layar display saat ada panggilan baru'
+                            : 'Layar display akan senyap — tidak ada suara notifikasi'}
+                        </p>
+                      </div>
+                    </div>
                     <button
                       type="button"
-                      onClick={handleHapusPengumumanDarurat}
-                      className="bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold px-3 py-1 rounded-xl cursor-pointer flex items-center gap-1"
+                      onClick={() => setDisplaySoundEnabled(!displaySoundEnabled)}
+                      className={`relative w-12 h-6 rounded-full transition-colors duration-200 cursor-pointer shrink-0 ${displaySoundEnabled ? 'bg-violet-500' : 'bg-slate-300'}`}
                     >
-                      <XCircle className="w-3.5 h-3.5" /> Hapus Pengumuman
+                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${displaySoundEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
                     </button>
-                  )}
+                  </div>
                 </div>
-                <input
-                  type="text"
-                  value={pengumumanDarurat}
-                  onChange={(e) => setPengumumanDarurat(e.target.value)}
-                  placeholder="Contoh: Loket tutup jam 11:30 WIB karena rapat koordinasi..."
-                  className="w-full px-4 py-3 rounded-xl bg-white border border-red-200 text-sm text-red-900 placeholder-red-300 focus:outline-none focus:ring-2 focus:ring-red-500 font-medium"
-                />
+
+                {/* Tombol Simpan Bawah */}
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    type="submit"
+                    className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-7 py-3.5 rounded-2xl text-xs shadow-md shadow-teal-600/20 transition-all cursor-pointer flex items-center gap-2"
+                  >
+                    <CheckCircle2 className="w-4 h-4" /> Simpan Seluruh Pengaturan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      loadAdminData();
+                      showToast('Perubahan pengaturan dibatalkan.', 'info');
+                    }}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-6 py-3.5 rounded-2xl text-xs transition-all cursor-pointer flex items-center gap-2 border border-slate-200"
+                  >
+                    <RotateCcw className="w-4 h-4" /> Batalkan
+                  </button>
+                </div>
+
               </div>
 
-              <button
-                type="submit"
-                className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-6 py-3.5 rounded-2xl text-xs shadow-md shadow-teal-600/20 transition-all cursor-pointer flex items-center gap-2"
-              >
-                <CheckCircle2 className="w-4 h-4" /> Simpan Pengaturan
-              </button>
+            </div>
 
-            </form>
-          </div>
+          </form>
         )}
 
         {/* ================= TAB 3: EKSPOR LAPORAN CSV / EXCEL ================= */}
         {activeMenu === 'laporan' && (
-          <div className="bg-white rounded-3xl shadow-xs border border-slate-200 p-6 space-y-5">
+          <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-xs border border-slate-200/80 p-6 space-y-5">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center">
                 <Download className="w-5 h-5" />
@@ -1522,18 +2040,20 @@ export default function AdminPage() {
             </div>
 
             {/* Filter Periode */}
-            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1">
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 w-full overflow-hidden">
+              <div className="w-full sm:w-auto">
+                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
                   Pilih Periode
                 </label>
-                <div className="flex gap-1.5 bg-white p-1 rounded-xl border border-slate-200">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-white p-1.5 rounded-xl border border-slate-200 w-full sm:w-auto">
                   {['HARIAN', 'BULANAN', 'TAHUNAN', 'SEMUA'].map((p) => (
                     <button
                       key={p}
                       onClick={() => setFilterPeriode(p)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                        filterPeriode === p ? 'bg-teal-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      className={`px-3 py-2 sm:py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer text-center whitespace-nowrap ${
+                        filterPeriode === p 
+                          ? 'bg-teal-600 text-white shadow-xs' 
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                       }`}
                     >
                       {p}
@@ -1615,203 +2135,243 @@ export default function AdminPage() {
               </div>
             </div>
 
-            <div className="text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl border border-slate-200 leading-relaxed">
+            <div className="text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl border border-slate-200/80 leading-relaxed">
               <span className="font-bold text-slate-800 block mb-1">Informasi Kolom Laporan:</span>
               File CSV / Excel berisi kolom yang sinkron: <strong>No</strong>, <strong>Nomor Antrean</strong>, <strong>Nama Pasien</strong>, <strong>Jam Daftar</strong>, dan <strong>Jam Selesai</strong>.
             </div>
           </div>
         )}
 
-        {/* ================= TAB 4: GANTI SANDI ADMIN ================= */}
+        {/* ================= TAB 4: GANTI SANDI ADMIN (2-Kolom Seimbang & Rapi) ================= */}
         {activeMenu === 'sandi' && (
-          <div className="max-w-2xl mx-auto space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full items-start animate-fade-in">
             
-            {/* Header Tab Sandi */}
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-7">
-              <div className="flex items-center gap-3.5 pb-4 border-b border-slate-100">
-                <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0 border border-teal-100 shadow-2xs">
-                  <Key className="w-6 h-6" />
-                </div>
-                <div>
-                  <h2 className="font-black text-slate-900 text-lg">Keamanan & Sandi Loket Petugas</h2>
-                  <p className="text-xs text-slate-400">Kelola dan perbarui kredensial akses panel loket secara aman</p>
-                </div>
-              </div>
-
-              {/* 1. Username Terdaftar (Disensor) */}
-              <div className="mt-5 bg-teal-50/70 border border-teal-100 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <ShieldCheck className="w-5 h-5 text-teal-600 shrink-0" />
+            {/* KOLOM KIRI: INFO AKUN & CEK SANDI SAAT INI */}
+            <div className="lg:col-span-5 space-y-6">
+              {/* Header & Info Username Disensor */}
+              <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-sm border border-slate-200/80 p-6 sm:p-7">
+                <div className="flex items-center gap-3.5 pb-4 border-b border-slate-100">
+                  <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0 border border-teal-100 shadow-2xs">
+                    <Key className="w-6 h-6" />
+                  </div>
                   <div>
-                    <p className="text-xs font-bold text-teal-950">
-                      Username Akun Petugas:
-                    </p>
-                    <p className="text-[11px] text-teal-700">
-                      Tersensor demi privasi & tersinkronisasi di Supabase
-                    </p>
+                    <h2 className="font-black text-slate-900 text-lg">Keamanan & Sandi Loket</h2>
+                    <p className="text-xs text-slate-400">Kredensial akun petugas tersinkronisasi di Supabase</p>
                   </div>
                 </div>
 
-                <div className="inline-flex items-center gap-1.5 bg-white border border-teal-200 px-3.5 py-1.5 rounded-xl shadow-2xs">
-                  <span className="text-[11px] text-slate-400 font-bold">Username:</span>
-                  <span className="font-mono font-black text-teal-800 text-xs tracking-wider">
-                    {sensorUsername(savedUsername)}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* 2. FITUR INTIP / CEK PASSWORD SAAT INI (Wajib Input Username Dulu) */}
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-7">
-              <div className="flex items-center gap-2 mb-2">
-                <Eye className="w-4 h-4 text-teal-600" />
-                <h3 className="text-sm font-bold text-slate-800">
-                  Lihat Kata Sandi Saat Ini
-                </h3>
-              </div>
-              <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-                Untuk alasan keamanan, masukkan username akun Anda dengan benar untuk membuka kata sandi saat ini.
-              </p>
-
-              <form onSubmit={handleVerifyUsernameForPassword} className="space-y-3">
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <input
-                    type="text"
-                    value={verifyUsernameInput}
-                    onChange={(e) => {
-                      setVerifyUsernameInput(e.target.value);
-                      setIsPassVerifiedAndRevealed(false);
-                    }}
-                    placeholder={`Ketik username asli (contoh: ${savedUsername ? savedUsername[0] : 'a'}...)`}
-                    className="flex-1 px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
-                    required
-                  />
-                  <button
-                    type="submit"
-                    className="bg-slate-900 hover:bg-black text-white px-5 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-sm shrink-0 flex items-center justify-center gap-1.5"
-                  >
-                    <ShieldCheck className="w-4 h-4 text-teal-400" />
-                    Buka Sandi
-                  </button>
-                </div>
-              </form>
-
-              {/* Tampilan Sandi Jika Username Terverifikasi */}
-              {isPassVerifiedAndRevealed ? (
-                <div className="mt-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 animate-fade-in flex items-center justify-between">
-                  <div>
-                    <p className="text-[11px] font-bold text-emerald-900">Kata Sandi Saat Ini Terbuka:</p>
-                    <p className="font-mono text-base font-black text-emerald-950 tracking-wider mt-0.5">
-                      {showRevealedPassword ? savedPass : '••••••••••••'}
-                    </p>
+                {/* 1. Status Akun Terdaftar (Aman & Terenkripsi) */}
+                <div className="mt-5 bg-teal-50/70 border border-teal-100 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-4">
+                    <ShieldCheck className="w-5 h-5 text-teal-600 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-teal-950">
+                        Kredensial Akun Petugas:
+                      </p>
+                      <p className="text-[11px] text-teal-700">
+                        Username & kata sandi dirahasiakan & terenkripsi di database
+                      </p>
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowRevealedPassword(!showRevealedPassword)}
-                    className="inline-flex items-center gap-1 bg-white hover:bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-xl border border-emerald-200 text-xs font-bold cursor-pointer transition-all shadow-2xs"
-                  >
-                    {showRevealedPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    <span>{showRevealedPassword ? 'Sembunyikan' : 'Tampilkan'}</span>
-                  </button>
+
+                  <div className="w-full flex items-center justify-between gap-2 bg-white border border-teal-200 px-3.5 py-2 rounded-xl shadow-2xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Lock className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                      <span className="font-mono font-black text-slate-700 text-xs tracking-widest">
+                      ••••••••••••
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200 srink-0">
+                      Terlindungi
+                    </span>
+                  </div>
                 </div>
-              ) : verifyUsernameInput && (
-                <p className="text-[11px] text-slate-400 mt-2 italic">
-                  * Ketikkan username akun yang cocok lalu klik &quot;Buka Sandi&quot;.
+              </div>
+
+              {/* 2. FITUR INTIP / CEK PASSWORD SAAT INI (Wajib Masukkan Username Manual) */}
+              <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-sm border border-slate-200/80 p-6 sm:p-7">
+                <div className="flex items-center gap-2 mb-2">
+                  <Eye className="w-4 h-4 text-teal-600" />
+                  <h3 className="text-sm font-bold text-slate-800">
+                    Lihat Kata Sandi Saat Ini
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                  Masukkan username Anda secara manual dengan benar untuk membuka dan melihat kata sandi aktif saat ini.
                 </p>
-              )}
-            </div>
 
-            {/* 3. FORM GANTI PASSWORD BARU */}
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-7">
-              <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-100">
-                <Key className="w-4 h-4 text-teal-600" />
-                <h3 className="text-sm font-bold text-slate-800">
-                  Perbarui Kata Sandi Baru
-                </h3>
-              </div>
-
-              <form onSubmit={handleUpdatePassword} className="space-y-4">
-                {/* 1. Password Saat Ini */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                    1. Masukkan Password Saat Ini
-                  </label>
-                  <div className="relative">
+                <form onSubmit={handleVerifyUsernameForPassword} autoComplete="off" className="space-y-3">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
-                      type={showCurrentPass ? 'text' : 'password'}
-                      value={currentPass}
-                      onChange={(e) => setCurrentPass(e.target.value)}
-                      placeholder="Masukkan password saat ini yang aktif"
-                      className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium pr-11"
+                      type="text"
+                      name="sec_verify_username_field"
+                      autoComplete="new-password"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      readOnly
+                      onFocus={(e) => e.target.removeAttribute('readOnly')}
+                      value={verifyUsernameInput}
+                      onChange={(e) => {
+                        setVerifyUsernameInput(e.target.value);
+                        setIsPassVerifiedAndRevealed(false);
+                      }}
+                      placeholder="Masukkan username Anda di sini..."
+                      className="flex-1 px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-800"
                       required
                     />
                     <button
-                      type="button"
-                      onClick={() => setShowCurrentPass(!showCurrentPass)}
-                      className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      type="submit"
+                      className="bg-slate-900 hover:bg-black text-white px-5 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-sm shrink-0 flex items-center justify-center gap-1.5"
                     >
-                      {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      <ShieldCheck className="w-4 h-4 text-teal-400" />
+                      Buka Sandi
                     </button>
                   </div>
+                </form>
+
+                {/* Tampilan Sandi Jika Username Cocok */}
+                {isPassVerifiedAndRevealed ? (
+                  <div className="mt-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 animate-fade-in flex items-center justify-between">
+                    <div>
+                      <p className="text-[11px] font-bold text-emerald-900">Kata Sandi Terbuka:</p>
+                      <p className="font-mono text-base font-black text-emerald-950 tracking-wider mt-0.5">
+                        {showRevealedPassword ? savedPass : '••••••••••••'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowRevealedPassword(!showRevealedPassword)}
+                      className="inline-flex items-center gap-1 bg-white hover:bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-xl border border-emerald-200 text-xs font-bold cursor-pointer transition-all shadow-2xs"
+                    >
+                      {showRevealedPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      <span>{showRevealedPassword ? 'Sembunyikan' : 'Tampilkan'}</span>
+                    </button>
+                  </div>
+                ) : verifyUsernameInput && (
+                  <p className="text-[11px] text-slate-400 mt-2 italic">
+                    * Ketikkan username akun yang cocok lalu klik &quot;Buka Sandi&quot;.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* KOLOM KANAN: FORM GANTI PASSWORD BARU */}
+            <div className="lg:col-span-7 bg-white/95 backdrop-blur-md rounded-3xl shadow-sm border border-slate-200/80 p-6 sm:p-7 overflow-hidden">
+              <div>
+                <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-100">
+                  <Key className="w-4 h-4 text-teal-600" />
+                  <h3 className="text-sm font-bold text-slate-800">
+                    Perbarui Kata Sandi Baru
+                  </h3>
                 </div>
 
-                {/* 2. Password Baru */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                    2. Password Baru (Min. 6 Karakter)
-                  </label>
-                  <div className="relative">
+                <form onSubmit={handleUpdatePassword} autoComplete="off" className="space-y-4">
+                  {/* 1. Password Saat Ini (Kosong manual) */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                      1. Masukkan Password Saat Ini
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showCurrentPass ? 'text' : 'password'}
+                        name="sec_pwd_curr_manual"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        readOnly
+                        onFocus={(e) => e.target.removeAttribute('readOnly')}
+                        value={currentPass}
+                        onChange={(e) => setCurrentPass(e.target.value)}
+                        placeholder="Ketik password saat ini..."
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium pr-11 text-slate-800"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCurrentPass(!showCurrentPass)}
+                        className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2. Password Baru */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                      2. Password Baru (Min. 6 Karakter)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showNewPass ? 'text' : 'password'}
+                        name="sec_pwd_new_manual"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        readOnly
+                        onFocus={(e) => e.target.removeAttribute('readOnly')}
+                        value={newPass}
+                        onChange={(e) => setNewPass(e.target.value)}
+                        placeholder="Ketik password baru..."
+                        className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium pr-11 text-slate-800"
+                        required
+                        minLength={6}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPass(!showNewPass)}
+                        className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        {showNewPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 3. Konfirmasi Password Baru */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                      3. Konfirmasi Ulang Password Baru
+                    </label>
                     <input
-                      type={showNewPass ? 'text' : 'password'}
-                      value={newPass}
-                      onChange={(e) => setNewPass(e.target.value)}
-                      placeholder="Ketik password baru"
-                      className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium pr-11"
+                      type="password"
+                      name="sec_pwd_conf_manual"
+                      autoComplete="new-password"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      readOnly
+                      onFocus={(e) => e.target.removeAttribute('readOnly')}
+                      value={confirmPass}
+                      onChange={(e) => setConfirmPass(e.target.value)}
+                      placeholder="Ulangi password baru persis..."
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium text-slate-800"
                       required
                       minLength={6}
                     />
+                  </div>
+
+                  <div className="pt-3">
                     <button
-                      type="button"
-                      onClick={() => setShowNewPass(!showNewPass)}
-                      className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      type="submit"
+                      disabled={isChangingPass}
+                      className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-2xl text-xs shadow-md shadow-teal-600/20 cursor-pointer transition-all flex items-center justify-center gap-2"
                     >
-                      {showNewPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      {isChangingPass ? (
+                        'Menyimpan Sandi ke Supabase...'
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-4 h-4" /> Simpan Perubahan Sandi Baru
+                        </>
+                      )}
                     </button>
                   </div>
-                </div>
+                </form>
+              </div>
 
-                {/* 3. Konfirmasi Password Baru */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                    3. Konfirmasi Ulang Password Baru
-                  </label>
-                  <input
-                    type="password"
-                    value={confirmPass}
-                    onChange={(e) => setConfirmPass(e.target.value)}
-                    placeholder="Ketik ulang persis password baru di atas"
-                    className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
-                    required
-                    minLength={6}
-                  />
-                </div>
-
-                <div className="pt-2">
-                  <button
-                    type="submit"
-                    disabled={isChangingPass}
-                    className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-2xl text-xs shadow-md shadow-teal-600/20 cursor-pointer transition-all flex items-center justify-center gap-2"
-                  >
-                    {isChangingPass ? (
-                      'Menyimpan Sandi ke Supabase...'
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" /> Simpan Perubahan Sandi Baru
-                      </>
-                    )}
-                  </button>
-                </div>
-              </form>
+              <div className="mt-6 pt-4 border-t border-slate-100 text-center">
+                <p className="text-[11px] text-slate-400">
+                  Data kredensial baru akan langsung disinkronkan ke tabel pengaturan di Supabase.
+                </p>
+              </div>
             </div>
 
           </div>
@@ -1839,7 +2399,7 @@ export default function AdminPage() {
               <button
                 type="button"
                 onClick={() => setShowResetModal(false)}
-                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer"
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer border border-slate-200"
               >
                 Batalkan
               </button>
@@ -1851,6 +2411,82 @@ export default function AdminPage() {
                 Ya, Tutup & Reset
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL KONFIRMASI KELUAR ADMIN ================= */}
+      {showLogoutModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl border border-slate-100 text-center">
+            <div className="w-16 h-16 bg-rose-50 text-rose-600 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-rose-100">
+              <LogOut className="w-8 h-8" />
+            </div>
+
+            <h3 className="text-lg font-black text-slate-900 mb-2">Keluar dari Panel Admin?</h3>
+            <p className="text-xs text-slate-500 mb-6 leading-relaxed">
+              Sesi login petugas akan diakhiri. Anda perlu memasukkan kredensial kembali untuk mengelola loket antrean.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowLogoutModal(false)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer border border-slate-200"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLogoutModal(false);
+                  setIsLoggedIn(false);
+                  sessionStorage.removeItem('admin_is_logged_in');
+                }}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-2xl text-xs shadow-lg shadow-rose-200 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                Ya, Keluar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL PANDUAN INSTALL PWA ADMIN ================= */}
+      {showPwaInstallGuideModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl border border-slate-100 text-center">
+            <div className="w-14 h-14 bg-teal-50 text-teal-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-teal-200">
+              <Smartphone className="w-7 h-7" />
+            </div>
+
+            <h3 className="text-base font-black text-slate-900 mb-2">Pasang Aplikasi Web (PWA)</h3>
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed text-left">
+              Tambahkan panel admin ke Layar Utama komputer atau ponsel untuk akses cepat tanpa mengetik URL dan menerima peringatan sistem:
+            </p>
+
+            <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-200/80 text-left text-xs text-slate-700 space-y-2 mb-5">
+              <div className="flex items-start gap-2">
+                <span className="font-black text-teal-600">•</span>
+                <span><strong>Komputer (Desktop Chrome/Edge):</strong> Klik ikon <strong>Install</strong> di sisi kanan bilah alamat (URL bar) atau menu browser ➔ Install App.</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="font-black text-teal-600">•</span>
+                <span><strong>Android (Chrome):</strong> Klik menu titik tiga di kanan atas ➔ pilih <strong>Tambahkan ke Layar Utama</strong>.</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="font-black text-teal-600">•</span>
+                <span><strong>iPhone / iPad (Safari):</strong> Klik tombol <strong>Bagikan (Share)</strong> ➔ geser dan pilih <strong>Tambahkan ke Layar Utama</strong>.</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowPwaInstallGuideModal(false)}
+              className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+            >
+              Saya Mengerti
+            </button>
           </div>
         </div>
       )}
