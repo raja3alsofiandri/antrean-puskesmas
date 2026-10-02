@@ -8,6 +8,7 @@ import {
   AlertTriangle, 
   Search, 
   Volume2, 
+  VolumeX,
   Trash2, 
   ExternalLink, 
   Lock, 
@@ -17,7 +18,14 @@ import {
   Navigation, 
   RotateCcw,
   CheckCircle2,
-  Ticket
+  Ticket,
+  Smartphone,
+  HelpCircle,
+  Sparkles,
+  MapPin,
+  ShieldCheck,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { 
   supabase, 
@@ -44,6 +52,18 @@ export default function PatientPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [hasSearched, setHasSearched] = useState(false);
+
+  // State Suara & Izin Aplikasi (PWA)
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const s = localStorage.getItem('patient_sound_enabled');
+      return s !== null ? s !== 'false' : true;
+    }
+    return true;
+  });
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
+  const [isAppInstalled, setIsAppInstalled] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
 
   // -------------------------------------------------------------
   // State Antrean Pasien Aktif & Publik
@@ -111,8 +131,72 @@ export default function PatientPage() {
     }
   }, []);
 
+  // PWA Install Event Listener
+  useEffect(() => {
+    const handleBeforeInstall = (e) => {
+      e.preventDefault();
+      setDeferredInstallPrompt(e);
+    };
+    const handleAppInstalled = () => {
+      setIsAppInstalled(true);
+      setDeferredInstallPrompt(null);
+      showToast('Aplikasi berhasil dipasang di perangkat Anda!', 'success');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    if (typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches) {
+      setIsAppInstalled(true);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (!deferredInstallPrompt) {
+      showToast('Aplikasi dapat dipasang melalui menu browser (Titik 3 / Bagikan ➔ Tambahkan ke Layar Utama).', 'info');
+      return;
+    }
+    try {
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setIsAppInstalled(true);
+        showToast('Memasang aplikasi antrean...', 'success');
+      }
+      setDeferredInstallPrompt(null);
+    } catch (err) {
+      console.warn('Install error:', err);
+    }
+  };
+
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('patient_sound_enabled', String(next));
+    }
+    if (next) {
+      requestNotificationPermission();
+      unlockAudio();
+      playNotificationChime();
+      showToast('Suara notifikasi & panggilan DIAKTIFKAN 🔊', 'success');
+    } else {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      showToast('Suara panggilan DINONAKTIFKAN (Mode Senyap) 🔇', 'info');
+    }
+  };
+
   // Suara Panggilan Realtime (Bip Medis Dilanjutkan Membaca Nomor Antrean dan Nama Pasien)
   const playCallingVoice = useCallback((nomor, namaPasien, panggilanKe = 1) => {
+    if (!soundEnabled) return;
+
     // 1. Bunyikan nada bip lonceng medis klinis
     playNotificationChime();
 
@@ -143,10 +227,12 @@ export default function PatientPage() {
     } catch (err) {
       console.warn('Gagal membunyikan Text-to-Speech panggilan:', err);
     }
-  }, []);
+  }, [soundEnabled]);
 
   // Suara Notifikasi Kesehatan & Peringatan Waktu Tiba (Saat Masuk Panggilan Bersiap)
   const playPeringatanLimaBesarVoice = useCallback((nomor, namaPasien, batasWaktu, sisaAntrean = 4) => {
+    if (!soundEnabled) return;
+
     // 1. Bunyikan nada bip lonceng medis klinis
     playNotificationChime();
 
@@ -159,7 +245,7 @@ export default function PatientPage() {
       const infoSisa = sisaAntrean === 0 
         ? 'giliran Anda berikutnya' 
         : `antrean Anda tersisa ${sisaAntrean} orang lagi di depan`;
-      const kalimat = `Pemberitahuan layanan kesehatan Puskesmas. Nomor antrean ${nomorSpelled}, atas nama ${namaPasien}, ${infoSisa}. Harap segera hadir di Puskesmas sebelum pukul ${batasWaktu} agar tidak terlewat.`;
+      const kalimat = `Pemberitahuan layanan antrean. Nomor antrean ${nomorSpelled}, atas nama ${namaPasien}, ${infoSisa}. Harap bersiap menuju loket sebelum pukul ${batasWaktu} agar tidak terlewat.`;
 
       const utterance = new SpeechSynthesisUtterance(kalimat);
       utterance.lang = 'id-ID';
@@ -179,7 +265,34 @@ export default function PatientPage() {
     } catch (err) {
       console.warn('Gagal membunyikan Text-to-Speech persiapan:', err);
     }
-  }, []);
+  }, [soundEnabled]);
+
+  // Minta Izin & Perbarui Lokasi GPS Interaktif
+  const handleRequestLocation = () => {
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      alert('Perangkat Anda tidak mendukung fitur geolokasi GPS.');
+      return;
+    }
+    setGpsData((prev) => ({ ...prev, loading: true }));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        lastCoordsRef.current = { lat: latitude, lon: longitude };
+        updateRouteOSRM(latitude, longitude, config.latitude, config.longitude);
+        showToast('Koordinat GPS berhasil diperbarui!', 'success');
+      },
+      (err) => {
+        console.warn('GPS error:', err.message);
+        setGpsData((prev) => ({
+          ...prev,
+          loading: false,
+          error: 'Izin lokasi belum diberikan pada peramban.',
+        }));
+        showToast('Izin akses lokasi belum diaktifkan di browser.', 'alert');
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  };
 
   // -------------------------------------------------------------
   // 2. Kalkulasi Rute OSRM Jarak
@@ -738,561 +851,754 @@ export default function PatientPage() {
         </aside>
       )}
 
-      <div className="relative z-10 max-w-md mx-auto pt-6 px-4">
+      <div className="relative z-10 max-w-6xl mx-auto pt-6 px-4 sm:px-6 lg:px-8">
         
-        {/* ================= HEADER PUSKESMAS ================= */}
-        <header className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-white/95 border border-teal-100 text-teal-600 mb-3 shadow-md shadow-teal-100/50 backdrop-blur-xs overflow-hidden">
-            {config.logoUrl.startsWith('http') || config.logoUrl.startsWith('data:') ? (
-              <img 
-                src={config.logoUrl} 
-                alt="Logo Puskesmas" 
-                className="w-16 h-16 object-contain rounded-2xl p-1" 
-              />
-            ) : (
-              <span className="text-4xl">{config.logoUrl || '🏥'}</span>
-            )}
-          </div>
+        {/* ================= LAYOUT UTAMA: RESPONSIVE DESKTOP (2 KOLOM) & MOBILE ================= */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
           
-          <h1 className="text-2xl font-black tracking-tight text-slate-900">{config.namaPuskesmas}</h1>
-          <p className="text-xs text-slate-600 mt-1 max-w-xs mx-auto leading-relaxed font-medium">
-            {config.alamatPuskesmas}
-          </p>
-
-          {/* Status Loket Badge */}
-          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border transition-colors bg-white/90 backdrop-blur-xs shadow-xs">
-            <span className={`w-2 h-2 rounded-full ${config.statusBuka ? 'bg-emerald-500 animate-ping' : 'bg-red-500'}`} />
-            <span className={config.statusBuka ? 'text-emerald-700' : 'text-red-700'}>
-              {config.statusBuka ? 'Loket Pendaftaran Buka' : 'Loket Pendaftaran Ditutup'}
-            </span>
-          </div>
-        </header>
-
-        {/* ================= NOTIFIKASI TIKET AKTIF (Bila pengguna kembali ke form) ================= */}
-        {myQueue && !tampilkanTiket && (
-          <div className="bg-teal-50 border border-teal-200 rounded-2xl p-3.5 mb-5 flex items-center justify-between shadow-xs animate-fade-in">
-            <div className="flex items-center gap-3">
-              <span className="bg-teal-600 text-white text-xs font-black px-2.5 py-1.5 rounded-xl shadow-xs">
-                {myQueue.nomor}
-              </span>
-              <div>
-                <p className="text-xs font-bold text-slate-800">{myQueue.nama}</p>
-                <p className="text-[11px] text-teal-700 font-medium">
-                  {myQueue.status === 'MEMANGGIL' ? 'Sedang Dipanggil ke Loket!' : `Status: ${myQueue.status}`}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => setTampilkanTiket(true)}
-              className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs"
-            >
-              <Ticket className="w-3.5 h-3.5" /> Buka Tiket
-            </button>
-          </div>
-        )}
-
-        {/* ================= TAB NAVIGASI ================= */}
-        {(!myQueue || !tampilkanTiket) && (
-          <div className="flex bg-slate-200/80 p-1.5 rounded-2xl mb-6 border border-slate-200">
-            <button
-              onClick={() => { setTabAktif('ambil'); setHasSearched(false); }}
-              className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                tabAktif === 'ambil'
-                  ? 'bg-white text-teal-700 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Ambil Antrean
-            </button>
-            <button
-              onClick={() => setTabAktif('cari')}
-              className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                tabAktif === 'cari'
-                  ? 'bg-white text-teal-700 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Cek / Cari Antrean
-            </button>
-          </div>
-        )}
-
-        {/* ================= 1. FORM PENDAFTARAN MANDIRI ================= */}
-        {tabAktif === 'ambil' && (!myQueue || !tampilkanTiket) && (
-          <div className="bg-white/95 backdrop-blur-xs rounded-3xl shadow-xl shadow-slate-200/60 p-6 sm:p-8 border border-slate-100 mb-6">
+          {/* ================= KOLOM KIRI (PROFIL, STATUS, KONTROL FITUR & TENTANG SISTEM) ================= */}
+          <div className="lg:col-span-5 space-y-5">
             
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
-                <User className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-slate-800">Pendaftaran Antrean Mandiri</h2>
-              </div>
-            </div>
-
-            {!config.statusBuka ? (
-              <div className="bg-red-50 border border-red-200 rounded-2xl p-5 text-center my-4">
-                <Lock className="w-8 h-8 text-red-500 mx-auto mb-2" />
-                <h3 className="text-sm font-bold text-red-900">Pendaftaran Ditutup Sementara</h3>
-                <p className="text-xs text-red-700 mt-1 leading-relaxed">
-                  Loket antrean pendaftaran sedang ditutup oleh pihak Puskesmas. Silakan hubungi petugas loket.
-                </p>
-              </div>
-            ) : (
-              <form onSubmit={handleAmbilAntrean} className="space-y-4">
-                <div>
-                  <label htmlFor="patient-input" className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                    Nama Pasien
-                  </label>
-                  <input
-                    id="patient-input"
-                    type="text"
-                    value={inputNama}
-                    onChange={(e) => setInputNama(e.target.value)}
-                    placeholder="Masukkan nama sesuai KTP / Kartu Keluarga"
-                    className="w-full px-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:bg-white transition-all font-medium"
-                    required
-                    maxLength={60}
+            {/* Header Profil Instansi / Puskesmas */}
+            <div className="bg-white/95 backdrop-blur-md rounded-3xl p-6 sm:p-7 border border-slate-200/80 shadow-xl shadow-slate-200/50 text-center relative overflow-hidden">
+              <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-teal-500 via-emerald-500 to-teal-600" />
+              
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-teal-50 border border-teal-100 text-teal-600 mb-3.5 shadow-md shadow-teal-100/60 overflow-hidden">
+                {config.logoUrl && (config.logoUrl.startsWith('http') || config.logoUrl.startsWith('data:')) ? (
+                  <img 
+                    src={config.logoUrl} 
+                    alt="Logo Pelayanan" 
+                    className="w-16 h-16 object-contain rounded-2xl p-1" 
                   />
-                </div>
-
-                {/* Syarat Penting KTP/KK */}
-                <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 flex items-start gap-3">
-                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                  <div className="text-xs text-amber-900 leading-relaxed">
-                    <span className="font-bold block mb-0.5">Informasi Penting:</span>
-                    {config.infoPenting}
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white font-bold py-4 rounded-2xl shadow-lg shadow-teal-600/20 active:scale-[0.98] transition-all cursor-pointer text-sm flex items-center justify-center gap-2"
-                >
-                  {loading ? (
-                    <span className="inline-flex items-center gap-2">
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Memproses Antrean...
-                    </span>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      Ambil Nomor Antrean
-                    </>
-                  )}
-                </button>
-              </form>
-            )}
-
-          </div>
-        )}
-
-        {/* ================= 2. MENU CARI / CEK ANTREAN (HANYA YANG BELUM SELESAI) ================= */}
-        {tabAktif === 'cari' && (!myQueue || !tampilkanTiket) && (
-          <div className="bg-white/95 backdrop-blur-xs rounded-3xl shadow-xl shadow-slate-200/60 p-6 sm:p-8 border border-slate-100 mb-6">
-            
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
-                <Search className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-slate-800">Cek Status Nomor Antrean</h2>
-                <p className="text-xs text-slate-400">Lacak tiket Anda berdasarkan nama atau nomor antrean</p>
-              </div>
-            </div>
-
-            <form onSubmit={handleCariAntrean} className="flex gap-2 my-4">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Ketik nama atau nomor (contoh: A01)..."
-                className="flex-1 px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
-              />
-              <button
-                type="submit"
-                className="bg-slate-900 hover:bg-black text-white px-5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-md"
-              >
-                Cari
-              </button>
-            </form>
-
-            {hasSearched && (
-              <div className="mt-4 space-y-2.5">
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                  Hasil Pencarian ({searchResults.length}):
-                </p>
-                {searchResults.length === 0 ? (
-                  <div className="p-6 text-center bg-slate-50 rounded-2xl border border-slate-100 text-xs text-slate-400">
-                    Tidak ditemukan antrean aktif untuk &quot;{searchQuery}&quot;. Antrean yang sudah selesai tidak dapat dicari lagi.
-                  </div>
                 ) : (
-                  searchResults.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between hover:bg-slate-100 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="w-10 h-10 rounded-xl bg-teal-100 text-teal-700 font-black text-sm flex items-center justify-center">
-                          {item.nomor}
-                        </span>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-800">{item.nama}</h4>
-                          <span className={`inline-block mt-0.5 text-[10px] font-bold px-2 py-0.2 rounded-full uppercase ${
-                            item.status === 'MEMANGGIL' ? 'bg-blue-600 text-white animate-pulse' :
-                            item.status === 'TERLAMBAT' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
-                          }`}>
-                            {item.status}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => pilihAntreanHasilCari(item)}
-                        className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1"
-                      >
-                        Buka Tiket <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))
+                  <span className="text-4xl">{config.logoUrl || '🏥'}</span>
                 )}
               </div>
-            )}
-          </div>
-        )}
+              
+              <h1 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 leading-snug">
+                {config.namaPuskesmas}
+              </h1>
+              <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto leading-relaxed font-medium">
+                {config.alamatPuskesmas}
+              </p>
 
-        {/* ================= 3. TAMPILAN TIKET SINKRON (SAMA PERSIS DENGAN AMBIL ANTREAN) ================= */}
-        {myQueue && tampilkanTiket && (
-          <div className="bg-white/95 backdrop-blur-xs rounded-3xl shadow-xl shadow-slate-200/70 p-6 sm:p-8 border border-slate-100 relative overflow-hidden animate-fade-in mb-6">
-            
-            {/* Header Status Live */}
-            <div className="flex justify-between items-center mb-5">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Status Antrean Anda:
-              </span>
-              <span className={`text-xs font-black px-3.5 py-1.5 rounded-full uppercase tracking-wider flex items-center gap-1.5 ${
-                myQueue.status === 'MEMANGGIL'
-                  ? 'bg-blue-600 text-white shadow-md shadow-blue-200 animate-bounce'
-                  : myQueue.status === 'TERLAMBAT'
-                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                  : myQueue.status === 'SELESAI'
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-teal-100 text-teal-800'
-              }`}>
-                {myQueue.status === 'MEMANGGIL' && <Volume2 className="w-3.5 h-3.5 animate-spin" />}
-                {myQueue.status === 'TERLAMBAT' ? 'Dilewati (Terlambat)' : myQueue.status}
-              </span>
+              {/* Status Loket Badge */}
+              <div className="mt-4 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold border transition-colors bg-slate-50 border-slate-200/80">
+                <span className={`w-2.5 h-2.5 rounded-full ${config.statusBuka ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'}`} />
+                <span className={config.statusBuka ? 'text-emerald-700' : 'text-rose-700'}>
+                  {config.statusBuka ? 'Loket Pelayanan Buka' : 'Loket Pelayanan Ditutup'}
+                </span>
+              </div>
             </div>
 
-            {/* NOTIFIKASI KHUSUS SAAT SEDANG DIPANGGIL */}
-            {myQueue.status === 'MEMANGGIL' && (
-              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 mb-5 text-center animate-pulse">
-                <div className="flex items-center justify-center gap-2 text-blue-700 font-black text-sm mb-1">
-                  <Volume2 className="w-5 h-5 text-blue-600" />
-                  NOMOR ANDA SEDANG DIPANGGIL!
+            {/* CARD KONTROL AKSES & PERIZINAN PASIEN (Suara Switch & PWA Install) */}
+            <div className="bg-white/95 backdrop-blur-md rounded-3xl p-5 border border-slate-200/80 shadow-md space-y-4">
+              <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+                <Sparkles className="w-4 h-4 text-teal-600" />
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-700">
+                  Kontrol Akses & Fitur Aplikasi
+                </h3>
+              </div>
+
+              {/* 1. Switch Suara Panggilan & Notifikasi */}
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50/80 border border-slate-100">
+                <div className="flex items-center gap-3">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                    soundEnabled ? 'bg-teal-100 text-teal-700' : 'bg-slate-200 text-slate-500'
+                  }`}>
+                    {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-slate-800">
+                      Suara Pemanggilan Loket
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {soundEnabled ? 'Aktif (Bip nada medis + TTS)' : 'Senyap (Hanya visual layar)'}
+                    </p>
+                  </div>
                 </div>
-                <p className="text-xs text-blue-600 leading-relaxed">
-                  Silakan segera menuju ke ruang loket pemeriksaan sekarang.
-                </p>
+
+                {/* Switch Toggle Button */}
                 <button
-                  onClick={() => playCallingVoice(myQueue.nomor, myQueue.nama, (myQueue.panggilan_ke || 1) + 1)}
-                  className="mt-3 inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3.5 py-1.5 rounded-xl cursor-pointer shadow-sm transition-all"
+                  type="button"
+                  onClick={toggleSound}
+                  className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-300 ${
+                    soundEnabled ? 'bg-teal-600 justify-end' : 'bg-slate-300 justify-start'
+                  }`}
+                  title={soundEnabled ? 'Nonaktifkan suara' : 'Aktifkan suara'}
                 >
-                  <Volume2 className="w-3.5 h-3.5" /> Putar Ulang Suara Panggilan
+                  <div className="w-4 h-4 bg-white rounded-full shadow-md transform transition-transform" />
                 </button>
               </div>
-            )}
 
-            {/* NOTIFIKASI JIKA STATUS TERLAMBAT / DILEWATI */}
-            {myQueue.status === 'TERLAMBAT' && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-5 text-center">
-                <div className="flex items-center justify-center gap-2 text-amber-800 font-black text-xs uppercase tracking-wider mb-1">
-                  <AlertTriangle className="w-4 h-4 text-amber-600" />
-                  Antrean Sempat Terlewat
-                </div>
-                <p className="text-xs text-amber-700 leading-relaxed">
-                  Nomor Anda sempat dilewati karena belum hadir saat dipanggil. Antrean Anda otomatis digeser dan akan dipanggil kembali.
-                </p>
-              </div>
-            )}
-
-            {/* NOTIFIKASI JIKA STATUS SELESAI */}
-            {myQueue.status === 'SELESAI' && (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 mb-5 text-center">
-                <p className="text-xs font-bold text-emerald-800">
-                  🎉 Pelayanan Anda telah selesai. Terima kasih telah mengunjungi {config.namaPuskesmas}.
-                </p>
-              </div>
-            )}
-
-            {/* Peringatan Wajib Bawa KTP/KK Fisik & Toleransi Keterlambatan */}
-            <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 my-3 flex items-start gap-3 text-left">
-              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-              <div className="text-xs text-amber-900 leading-relaxed">
-                <span className="font-bold block mb-0.5">Persyaratan Berkas & Waktu:</span>
-                {config.infoPenting || 'Wajib membawa KTP atau Kartu Keluarga (KK) fisik saat datang ke loket. Toleransi keterlambatan maksimal 15 Menit.'}
-              </div>
-            </div>
-
-            {/* Nomor Tiket Besar */}
-            <div className="text-center py-4 bg-radial from-teal-50/80 to-transparent rounded-3xl my-2">
-              <p className="text-xs font-extrabold text-slate-400 uppercase tracking-widest">
-                Nomor Antrean
-              </p>
-              <h2 className="text-7xl font-black text-teal-600 tracking-tight my-2">
-                {myQueue.nomor}
-              </h2>
-              <p className="text-sm text-slate-500 font-medium">
-                Atas Nama: <strong className="text-slate-900 font-bold">{myQueue.nama}</strong>
-              </p>
-            </div>
-
-            {/* === PERKIRAAN WAKTU (Terstruktur & Rapi) === */}
-            <div className="mt-4 bg-slate-50/90 rounded-2xl border border-slate-100 overflow-hidden">
-              
-              {/* Header perkiraan */}
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
-                <Clock className="w-4 h-4 text-teal-600" />
-                <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Perkiraan Waktu Pelayanan</span>
-              </div>
-
-              {/* Tiga stat block sejajar */}
-              <div className="grid grid-cols-3 divide-x divide-slate-100">
-                <div className="p-3 text-center">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Estimasi Tunggu</p>
-                  <p className="text-xl font-black text-teal-700 leading-none">
-                    {hitungEstimasiMenitRealtime()}
-                  </p>
-                  <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Menit</p>
+              {/* 2. Tombol Install Web App (PWA) */}
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-gradient-to-r from-teal-50/70 to-emerald-50/70 border border-teal-100/80">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-teal-600 text-white flex items-center justify-center shadow-xs">
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-bold text-teal-950">
+                      {isAppInstalled ? 'Aplikasi Web Terpasang' : 'Pasang Aplikasi di HP'}
+                    </p>
+                    <p className="text-[11px] text-teal-700">
+                      {isAppInstalled ? 'Mendukung notifikasi latar belakang' : 'Akses lebih cepat & dapat notif PWA'}
+                    </p>
+                  </div>
                 </div>
 
-                <div className="p-3 text-center">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Antrean Depan</p>
-                  <p className="text-xl font-black text-blue-700 leading-none">
-                    {hitungAntreanDiDepan()}
-                  </p>
-                  <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Orang</p>
-                </div>
-
-                <div className="p-3 text-center">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Tiba Sebelum</p>
-                  {myQueue.status === 'MEMANGGIL' ? (
-                    <p className="text-[11px] font-black text-blue-600 leading-tight mt-1">Langsung ke Loket!</p>
+                <button
+                  type="button"
+                  onClick={handleInstallApp}
+                  className="bg-teal-700 hover:bg-teal-800 text-white px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1 shrink-0"
+                >
+                  {isAppInstalled ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Terpasang
+                    </>
                   ) : (
                     <>
-                      <p className="text-sm font-black text-emerald-700 leading-none">{hitungBatasWaktuKedatangan()}</p>
+                      <Smartphone className="w-3.5 h-3.5" /> Pasang
                     </>
                   )}
-                </div>
-              </div>
-
-              {/* Status badge bawah */}
-              {myQueue.status !== 'SELESAI' && (
-                <div className={`px-4 py-2.5 flex items-center justify-between border-t border-slate-100 ${
-                  myQueue.status === 'MEMANGGIL' ? 'bg-blue-50' : hitungAntreanDiDepan() < 5 ? 'bg-emerald-50' : 'bg-white'
-                }`}>
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    {myQueue.status === 'MEMANGGIL'
-                      ? 'Nomor Anda sedang dipanggil'
-                      : `Diusahakan hadir sebelum pukul ${hitungBatasWaktuKedatangan()}`}
-                  </span>
-                  <span className={`text-[10px] font-black px-2.5 py-1 rounded-full shrink-0 ml-2 ${
-                    myQueue.status === 'MEMANGGIL'
-                      ? 'bg-blue-600 text-white animate-pulse'
-                      : hitungAntreanDiDepan() === 0
-                      ? 'bg-emerald-600 text-white animate-bounce'
-                      : hitungAntreanDiDepan() < 5
-                      ? 'bg-emerald-500 text-white animate-pulse'
-                      : 'bg-slate-200 text-slate-600'
-                  }`}>
-                    {myQueue.status === 'MEMANGGIL'
-                      ? 'Panggilan Aktif'
-                      : hitungAntreanDiDepan() === 0
-                      ? 'Giliran Anda Berikutnya!'
-                      : hitungAntreanDiDepan() === 1
-                      ? 'Sisa 1 Antrean'
-                      : hitungAntreanDiDepan() < 5
-                      ? `Sisa ${hitungAntreanDiDepan()} Antrean`
-                      : `Antrean ke-${hitungAntreanDiDepan() + 1}`}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <hr className="my-5 border-slate-100" />
-
-            {/* INTEGRASI OSRM & GPS REALTIME (Setiap Gerakan Berubah) */}
-            <div className="bg-slate-50/90 p-4 rounded-2xl border border-slate-200/80 mb-5">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-                  <Navigation className="w-4 h-4 text-blue-600" />
-                  Rute & Jarak ke Puskesmas
-                </div>
-                <button
-                  onClick={() => {
-                    if (lastCoordsRef.current.lat) {
-                      updateRouteOSRM(lastCoordsRef.current.lat, lastCoordsRef.current.lon, config.latitude, config.longitude);
-                    }
-                  }}
-                  disabled={gpsData.loading}
-                  className="text-[10px] font-bold text-teal-700 hover:text-teal-900 bg-teal-50 px-2 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
-                  title="Perbarui GPS"
-                >
-                  <RotateCcw className={`w-3 h-3 ${gpsData.loading ? 'animate-spin' : ''}`} />
-                  Perbarui
                 </button>
               </div>
 
-              {/* GPS Stats: Jarak + Waktu tempuh */}
-              <div className="grid grid-cols-2 gap-2 mb-3">
-                <div className="bg-white rounded-xl p-2.5 border border-slate-100 text-center">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Jarak</p>
-                  <p className="text-base font-black text-slate-800 mt-0.5">{gpsData.jarakKm}</p>
-                </div>
-                <div className="bg-white rounded-xl p-2.5 border border-slate-100 text-center">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Perjalanan</p>
-                  <p className="text-base font-black text-slate-800 mt-0.5">{gpsData.waktuTempuh}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] text-slate-400 font-medium">
-                  {gpsData.metode}{gpsData.error ? ` • ${gpsData.error}` : ''}
-                </p>
-                <a
-                  href={config.mapsUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-md shadow-blue-200 transition-all flex items-center gap-1.5 cursor-pointer"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" /> Buka Maps
-                </a>
-              </div>
-            </div>
-
-            {/* Tombol Aksi: Kembali dan Batalkan / Hapus */}
-            {myQueue.status !== 'SELESAI' ? (
-              <div className="flex gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setTampilkanTiket(false)}
-                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <ArrowLeft className="w-4 h-4" /> Kembali
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowModal(true)}
-                  className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer border border-red-200/80 flex items-center justify-center gap-1.5"
-                >
-                  <Trash2 className="w-4 h-4" /> Batalkan Antrean
-                </button>
-              </div>
-            ) : (
+              {/* 3. Tombol Tentang / Panduan Sistem */}
               <button
-                onClick={() => {
-                  setMyQueue(null);
-                  localStorage.removeItem('antrean_pasien');
-                  setTabAktif('ambil');
-                }}
-                className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center gap-2"
+                type="button"
+                onClick={() => setShowAboutModal(true)}
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer border border-slate-200/80"
               >
-                Ambil Antrean Baru
+                <HelpCircle className="w-4 h-4 text-teal-600" />
+                <span>Tentang & Cara Kerja Sistem Antrean Cerdas</span>
               </button>
+            </div>
+
+          </div>
+
+          {/* ================= KOLOM KANAN (FORM PENDAFTARAN / TIKET / PENCARIAN & ANTREAN MENUNGGU) ================= */}
+          <div className="lg:col-span-7 space-y-5">
+            
+            {/* Notifikasi Tiket Aktif (Bila pengguna kembali ke form pendaftaran) */}
+            {myQueue && !tampilkanTiket && (
+              <div className="bg-teal-50 border border-teal-200 rounded-3xl p-4 flex items-center justify-between shadow-sm animate-fade-in">
+                <div className="flex items-center gap-3">
+                  <span className="bg-teal-600 text-white text-sm font-black px-3 py-1.5 rounded-2xl shadow-xs">
+                    {myQueue.nomor}
+                  </span>
+                  <div>
+                    <p className="text-xs font-bold text-slate-900">{myQueue.nama}</p>
+                    <p className="text-[11px] text-teal-700 font-semibold">
+                      {myQueue.status === 'MEMANGGIL' ? 'Sedang Dipanggil ke Loket!' : `Status Antrean: ${myQueue.status}`}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setTampilkanTiket(true)}
+                  className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                >
+                  <Ticket className="w-3.5 h-3.5" /> Buka Tiket
+                </button>
+              </div>
             )}
 
-          </div>
-        )}
-
-        {/* ================= 4. LIST ANTREAN MENUNGGU (PER BARIS RAPI) ================= */}
-        <div className="bg-white/95 backdrop-blur-xs rounded-3xl p-5 border border-slate-200/90 shadow-sm mb-8">
-          <div className="flex items-center justify-between mb-3.5 pb-2.5 border-b border-slate-100">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
-                <Users className="w-4 h-4" />
+            {/* TAB NAVIGASI */}
+            {(!myQueue || !tampilkanTiket) && (
+              <div className="flex bg-slate-200/80 p-1.5 rounded-2xl border border-slate-200 shadow-inner">
+                <button
+                  onClick={() => { setTabAktif('ambil'); setHasSearched(false); }}
+                  className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    tabAktif === 'ambil'
+                      ? 'bg-white text-teal-800 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Ticket className="w-4 h-4" /> Ambil Antrean Baru
+                </button>
+                <button
+                  onClick={() => setTabAktif('cari')}
+                  className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                    tabAktif === 'cari'
+                      ? 'bg-white text-teal-800 shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Search className="w-4 h-4" /> Cek / Cari Antrean & Menunggu
+                </button>
               </div>
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Daftar Antrean Menunggu
-                </h3>
-                <p className="text-[11px] text-slate-400">Total {antreanMenungguList.length} pasien dalam antrean</p>
-              </div>
-            </div>
-            <span className="text-[10px] text-slate-400 font-medium bg-slate-50 px-2.5 py-1 rounded-full border border-slate-100">
-              Privasi Terjaga
-            </span>
-          </div>
+            )}
 
-          {antreanMenungguList.length === 0 ? (
-            <div className="py-8 text-center text-xs text-slate-400 italic">
-              Belum ada antrean yang menunggu saat ini.
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-              {antreanMenungguList.map((item, idx) => {
-                const isMyTicket = myQueue && String(myQueue.id) === String(item.id);
-                return (
-                  <div
-                    key={item.id}
-                    className={`flex items-center justify-between p-3 rounded-2xl border transition-all ${
-                      isMyTicket 
-                        ? 'bg-teal-50/80 border-teal-300 ring-2 ring-teal-200/60' 
-                        : 'bg-slate-50/70 border-slate-100 hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs font-bold text-slate-400 w-5">#{idx + 1}</span>
-                      <div className={`w-10 h-10 rounded-xl font-black text-sm flex items-center justify-center shrink-0 ${
-                        isMyTicket ? 'bg-teal-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-teal-700'
-                      }`}>
-                        {item.nomor}
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-slate-800">
-                          Nomor {item.nomor} {isMyTicket ? <span className="text-teal-600 font-black ml-1">(Anda)</span> : ''}
-                        </p>
-                        <p className="text-[10px] text-slate-400">
-                          Daftar: {item.created_at ? new Date(item.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '-'}
-                        </p>
+            {/* ================= 1. FORM PENDAFTARAN MANDIRI ================= */}
+            {tabAktif === 'ambil' && (!myQueue || !tampilkanTiket) && (
+              <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-xl shadow-slate-200/60 p-6 sm:p-8 border border-slate-100">
+                
+                <div className="flex items-center gap-3 mb-5 pb-3 border-b border-slate-100">
+                  <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
+                    <User className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-800">Pendaftaran Antrean Mandiri</h2>
+                    <p className="text-xs text-slate-400">Dapatkan nomor antrean secara cepat, transparan, dan realtime</p>
+                  </div>
+                </div>
+
+                {!config.statusBuka ? (
+                  <div className="bg-rose-50 border border-rose-200 rounded-2xl p-5 text-center my-4">
+                    <Lock className="w-8 h-8 text-rose-500 mx-auto mb-2" />
+                    <h3 className="text-sm font-bold text-rose-900">Pendaftaran Ditutup Sementara</h3>
+                    <p className="text-xs text-rose-700 mt-1 leading-relaxed">
+                      Loket pendaftaran sedang ditutup oleh petugas. Silakan hubungi meja informasi atau petugas loket.
+                    </p>
+                  </div>
+                ) : (
+                  <form onSubmit={handleAmbilAntrean} className="space-y-4">
+                    <div>
+                      <label htmlFor="patient-input" className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                        Nama Lengkap Pasien
+                      </label>
+                      <input
+                        id="patient-input"
+                        type="text"
+                        value={inputNama}
+                        onChange={(e) => setInputNama(e.target.value)}
+                        placeholder="Masukkan nama sesuai KTP / Kartu Keluarga"
+                        className="w-full px-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:bg-white transition-all font-medium"
+                        required
+                        maxLength={60}
+                      />
+                    </div>
+
+                    {/* Syarat Penting KTP/KK */}
+                    <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 flex items-start gap-3">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="text-xs text-amber-900 leading-relaxed">
+                        <span className="font-bold block mb-0.5">Informasi Penting Persyaratan:</span>
+                        {config.infoPenting || 'Wajib membawa KTP atau Kartu Keluarga (KK) fisik saat datang ke loket.'}
                       </div>
                     </div>
 
-                    <span className={`text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1 ${
-                      item.status === 'MEMANGGIL'
-                        ? 'bg-blue-600 text-white animate-pulse'
-                        : item.status === 'TERLAMBAT'
-                        ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                        : 'bg-teal-100 text-teal-800'
-                    }`}>
-                      {item.status === 'MEMANGGIL' ? 'Dipanggil' : item.status === 'TERLAMBAT' ? 'Terlambat' : 'Menunggu'}
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white font-bold py-4 rounded-2xl shadow-lg shadow-teal-600/20 active:scale-[0.98] transition-all cursor-pointer text-sm flex items-center justify-center gap-2"
+                    >
+                      {loading ? (
+                        <span className="inline-flex items-center gap-2">
+                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          Memproses Antrean...
+                        </span>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-4 h-4" />
+                          Ambil Nomor Antrean Sekarang
+                        </>
+                      )}
+                    </button>
+                  </form>
+                )}
+
+              </div>
+            )}
+
+            {/* ================= 2. MENU CARI ANTREAN & DAFTAR ANTREAN MENUNGGU ================= */}
+            {tabAktif === 'cari' && (!myQueue || !tampilkanTiket) && (
+              <div className="space-y-5">
+                
+                {/* Panel Pencarian */}
+                <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-xl shadow-slate-200/60 p-6 sm:p-7 border border-slate-100">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
+                      <Search className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-base font-bold text-slate-800">Cek Status Nomor Antrean</h2>
+                      <p className="text-xs text-slate-400">Lacak tiket Anda berdasarkan nama atau nomor antrean</p>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleCariAntrean} className="flex gap-2 my-4">
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Ketik nama atau nomor (contoh: A01)..."
+                      className="flex-1 px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
+                    />
+                    <button
+                      type="submit"
+                      className="bg-slate-900 hover:bg-black text-white px-5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-md"
+                    >
+                      Cari
+                    </button>
+                  </form>
+
+                  {hasSearched && (
+                    <div className="mt-4 space-y-2.5">
+                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                        Hasil Pencarian ({searchResults.length}):
+                      </p>
+                      {searchResults.length === 0 ? (
+                        <div className="p-6 text-center bg-slate-50 rounded-2xl border border-slate-100 text-xs text-slate-400">
+                          Tidak ditemukan antrean aktif untuk &quot;{searchQuery}&quot;. Antrean yang sudah selesai tidak dapat dicari lagi.
+                        </div>
+                      ) : (
+                        searchResults.map((item) => (
+                          <div
+                            key={item.id}
+                            className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between hover:bg-slate-100 transition-colors"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="w-10 h-10 rounded-xl bg-teal-100 text-teal-700 font-black text-sm flex items-center justify-center">
+                                {item.nomor}
+                              </span>
+                              <div>
+                                <h4 className="text-xs font-bold text-slate-800">{item.nama}</h4>
+                                <span className={`inline-block mt-0.5 text-[10px] font-bold px-2 py-0.2 rounded-full uppercase ${
+                                  item.status === 'MEMANGGIL' ? 'bg-blue-600 text-white animate-pulse' :
+                                  item.status === 'TERLAMBAT' ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
+                                }`}>
+                                  {item.status}
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => pilihAntreanHasilCari(item)}
+                              className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                            >
+                              Buka Tiket <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* DAFTAR ANTREAN MENUNGGU (DIPINDAHKAN KE TAB CEK / CARI ANTREAN) */}
+                <div className="bg-white/95 backdrop-blur-md rounded-3xl p-5 sm:p-6 border border-slate-200/90 shadow-sm">
+                  <div className="flex items-center justify-between mb-3.5 pb-2.5 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
+                        <Users className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                          Daftar Seluruh Antrean Menunggu
+                        </h3>
+                        <p className="text-[11px] text-slate-400">Total {antreanMenungguList.length} orang dalam antrean loket</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-medium bg-slate-50 px-2.5 py-1 rounded-full border border-slate-100">
+                      Privasi Terjaga
                     </span>
                   </div>
-                );
-              })}
-            </div>
-          )}
+
+                  {antreanMenungguList.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-slate-400 italic">
+                      Belum ada antrean yang menunggu saat ini.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                      {antreanMenungguList.map((item, idx) => {
+                        const isMyTicket = myQueue && String(myQueue.id) === String(item.id);
+                        return (
+                          <div
+                            key={item.id}
+                            className={`flex items-center justify-between p-3 rounded-2xl border transition-all ${
+                              isMyTicket 
+                                ? 'bg-teal-50/80 border-teal-300 ring-2 ring-teal-200/60' 
+                                : 'bg-slate-50/70 border-slate-100 hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs font-bold text-slate-400 w-5">#{idx + 1}</span>
+                              <div className={`w-10 h-10 rounded-xl font-black text-sm flex items-center justify-center shrink-0 ${
+                                isMyTicket ? 'bg-teal-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-teal-700'
+                              }`}>
+                                {item.nomor}
+                              </div>
+                              <div>
+                                <p className="text-xs font-bold text-slate-800">
+                                  Nomor {item.nomor} {isMyTicket ? <span className="text-teal-600 font-black ml-1">(Anda)</span> : ''}
+                                </p>
+                                <p className="text-[10px] text-slate-400">
+                                  Daftar: {item.created_at ? new Date(item.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                                </p>
+                              </div>
+                            </div>
+
+                            <span className={`text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1 ${
+                              item.status === 'MEMANGGIL'
+                                ? 'bg-blue-600 text-white animate-pulse'
+                                : item.status === 'TERLAMBAT'
+                                ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                : 'bg-teal-100 text-teal-800'
+                            }`}>
+                              {item.status === 'MEMANGGIL' ? 'Dipanggil' : item.status === 'TERLAMBAT' ? 'Terlambat' : 'Menunggu'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            )}
+
+            {/* ================= 3. TAMPILAN TIKET SINKRON (SAMA PERSIS DENGAN AMBIL ANTREAN) ================= */}
+            {myQueue && tampilkanTiket && (
+              <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-xl shadow-slate-200/70 p-6 sm:p-8 border border-slate-100 relative overflow-hidden animate-fade-in">
+                
+                {/* Header Status Live */}
+                <div className="flex justify-between items-center mb-5">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                    Status Antrean Anda:
+                  </span>
+                  <span className={`text-xs font-black px-3.5 py-1.5 rounded-full uppercase tracking-wider flex items-center gap-1.5 ${
+                    myQueue.status === 'MEMANGGIL'
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-200 animate-bounce'
+                      : myQueue.status === 'TERLAMBAT'
+                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                      : myQueue.status === 'SELESAI'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-teal-100 text-teal-800'
+                  }`}>
+                    {myQueue.status === 'MEMANGGIL' && <Volume2 className="w-3.5 h-3.5 animate-spin" />}
+                    {myQueue.status === 'TERLAMBAT' ? 'Dilewati (Terlambat)' : myQueue.status}
+                  </span>
+                </div>
+
+                {/* NOTIFIKASI KHUSUS SAAT SEDANG DIPANGGIL */}
+                {myQueue.status === 'MEMANGGIL' && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 mb-5 text-center animate-pulse">
+                    <div className="flex items-center justify-center gap-2 text-blue-700 font-black text-sm mb-1">
+                      <Volume2 className="w-5 h-5 text-blue-600" />
+                      NOMOR ANDA SEDANG DIPANGGIL!
+                    </div>
+                    <p className="text-xs text-blue-600 leading-relaxed">
+                      Silakan segera menuju ke ruang loket pemeriksaan sekarang.
+                    </p>
+                    <button
+                      onClick={() => playCallingVoice(myQueue.nomor, myQueue.nama, (myQueue.panggilan_ke || 1) + 1)}
+                      className="mt-3 inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3.5 py-1.5 rounded-xl cursor-pointer shadow-sm transition-all"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" /> Putar Ulang Suara Panggilan
+                    </button>
+                  </div>
+                )}
+
+                {/* NOTIFIKASI JIKA STATUS TERLAMBAT / DILEWATI */}
+                {myQueue.status === 'TERLAMBAT' && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-5 text-center">
+                    <div className="flex items-center justify-center gap-2 text-amber-800 font-black text-xs uppercase tracking-wider mb-1">
+                      <AlertTriangle className="w-4 h-4 text-amber-600" />
+                      Antrean Sempat Terlewat
+                    </div>
+                    <p className="text-xs text-amber-700 leading-relaxed">
+                      Nomor Anda sempat dilewati karena belum hadir saat dipanggil. Antrean Anda otomatis digeser dan akan dipanggil kembali.
+                    </p>
+                  </div>
+                )}
+
+                {/* NOTIFIKASI JIKA STATUS SELESAI */}
+                {myQueue.status === 'SELESAI' && (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 mb-5 text-center">
+                    <p className="text-xs font-bold text-emerald-800">
+                      🎉 Pelayanan Anda telah selesai. Terima kasih telah berkunjung ke {config.namaPuskesmas}.
+                    </p>
+                  </div>
+                )}
+
+                {/* Peringatan Wajib Bawa KTP/KK Fisik & Toleransi Keterlambatan */}
+                <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 my-3 flex items-start gap-3 text-left">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-xs text-amber-900 leading-relaxed">
+                    <span className="font-bold block mb-0.5">Persyaratan Berkas & Waktu:</span>
+                    {config.infoPenting || 'Wajib membawa KTP atau Kartu Keluarga (KK) fisik saat datang ke loket. Toleransi keterlambatan maksimal 15 Menit.'}
+                  </div>
+                </div>
+
+                {/* Nomor Tiket Besar */}
+                <div className="text-center py-4 bg-radial from-teal-50/80 to-transparent rounded-3xl my-2">
+                  <p className="text-xs font-extrabold text-slate-400 uppercase tracking-widest">
+                    Nomor Antrean
+                  </p>
+                  <h2 className="text-7xl font-black text-teal-600 tracking-tight my-2">
+                    {myQueue.nomor}
+                  </h2>
+                  <p className="text-sm text-slate-500 font-medium">
+                    Atas Nama: <strong className="text-slate-900 font-bold">{myQueue.nama}</strong>
+                  </p>
+                </div>
+
+                {/* === PERKIRAAN WAKTU (Terstruktur & Rapi) === */}
+                <div className="mt-4 bg-slate-50/90 rounded-2xl border border-slate-100 overflow-hidden">
+                  
+                  {/* Header perkiraan */}
+                  <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
+                    <Clock className="w-4 h-4 text-teal-600" />
+                    <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Perkiraan Waktu Pelayanan</span>
+                  </div>
+
+                  {/* Tiga stat block sejajar */}
+                  <div className="grid grid-cols-3 divide-x divide-slate-100">
+                    <div className="p-3 text-center">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Estimasi Tunggu</p>
+                      <p className="text-xl font-black text-teal-700 leading-none">
+                        {hitungEstimasiMenitRealtime()}
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Menit</p>
+                    </div>
+
+                    <div className="p-3 text-center">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Antrean Depan</p>
+                      <p className="text-xl font-black text-blue-700 leading-none">
+                        {hitungAntreanDiDepan()}
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Orang</p>
+                    </div>
+
+                    <div className="p-3 text-center">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Tiba Sebelum</p>
+                      {myQueue.status === 'MEMANGGIL' ? (
+                        <p className="text-[11px] font-black text-blue-600 leading-tight mt-1">Langsung ke Loket!</p>
+                      ) : (
+                        <p className="text-sm font-black text-emerald-700 leading-none">{hitungBatasWaktuKedatangan()}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Status badge bawah */}
+                  {myQueue.status !== 'SELESAI' && (
+                    <div className={`px-4 py-2.5 flex items-center justify-between border-t border-slate-100 ${
+                      myQueue.status === 'MEMANGGIL' ? 'bg-blue-50' : hitungAntreanDiDepan() < 5 ? 'bg-emerald-50' : 'bg-white'
+                    }`}>
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        {myQueue.status === 'MEMANGGIL'
+                          ? 'Nomor Anda sedang dipanggil ke loket'
+                          : `Diusahakan hadir sebelum pukul ${hitungBatasWaktuKedatangan()}`}
+                      </span>
+                      <span className={`text-[10px] font-black px-2.5 py-1 rounded-full shrink-0 ml-2 ${
+                        myQueue.status === 'MEMANGGIL'
+                          ? 'bg-blue-600 text-white animate-pulse'
+                          : hitungAntreanDiDepan() === 0
+                          ? 'bg-emerald-600 text-white animate-bounce'
+                          : hitungAntreanDiDepan() < 5
+                          ? 'bg-emerald-500 text-white animate-pulse'
+                          : 'bg-slate-200 text-slate-600'
+                      }`}>
+                        {myQueue.status === 'MEMANGGIL'
+                          ? 'Panggilan Aktif'
+                          : hitungAntreanDiDepan() === 0
+                          ? 'Giliran Anda Berikutnya!'
+                          : hitungAntreanDiDepan() === 1
+                          ? 'Sisa 1 Antrean'
+                          : hitungAntreanDiDepan() < 5
+                          ? `Sisa ${hitungAntreanDiDepan()} Antrean`
+                          : `Antrean ke-${hitungAntreanDiDepan() + 1}`}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <hr className="my-5 border-slate-100" />
+
+                {/* INTEGRASI NAVIGASI LOKASI & JARAK KE LOKET (Teks OSRM diganti tombol Izinkan Lokasi) */}
+                <div className="bg-slate-50/90 p-4 rounded-2xl border border-slate-200/80 mb-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                      <Navigation className="w-4 h-4 text-blue-600" />
+                      Rute & Jarak ke Lokasi Pelayanan
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (lastCoordsRef.current.lat) {
+                          updateRouteOSRM(lastCoordsRef.current.lat, lastCoordsRef.current.lon, config.latitude, config.longitude);
+                        } else {
+                          handleRequestLocation();
+                        }
+                      }}
+                      disabled={gpsData.loading}
+                      className="text-[10px] font-bold text-teal-700 hover:text-teal-900 bg-teal-50 px-2 py-1 rounded-lg flex items-center gap-1 cursor-pointer"
+                      title="Perbarui GPS"
+                    >
+                      <RotateCcw className={`w-3 h-3 ${gpsData.loading ? 'animate-spin' : ''}`} />
+                      Perbarui
+                    </button>
+                  </div>
+
+                  {/* GPS Stats: Jarak + Waktu tempuh */}
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    <div className="bg-white rounded-xl p-2.5 border border-slate-100 text-center">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Jarak Tempuh</p>
+                      <p className="text-base font-black text-slate-800 mt-0.5">{gpsData.jarakKm}</p>
+                    </div>
+                    <div className="bg-white rounded-xl p-2.5 border border-slate-100 text-center">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Estimasi Perjalanan</p>
+                      <p className="text-base font-black text-slate-800 mt-0.5">{gpsData.waktuTempuh}</p>
+                    </div>
+                  </div>
+
+                  {/* Tombol Perizinan Lokasi & Link Google Maps */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={handleRequestLocation}
+                      disabled={gpsData.loading}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold transition-all cursor-pointer border border-teal-200/60"
+                    >
+                      <MapPin className="w-3.5 h-3.5 text-teal-600" />
+                      {gpsData.loading ? 'Mendeteksi GPS...' : 'Izinkan / Perbarui Lokasi'}
+                    </button>
+
+                    <a
+                      href={config.mapsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold shadow-sm shadow-blue-200 transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" /> Buka Peta Loket
+                    </a>
+                  </div>
+                </div>
+
+                {/* Tombol Aksi: Kembali dan Batalkan / Hapus */}
+                {myQueue.status !== 'SELESAI' ? (
+                  <div className="flex gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setTampilkanTiket(false)}
+                      className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <ArrowLeft className="w-4 h-4" /> Kembali ke Menu
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowModal(true)}
+                      className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer border border-rose-200/80 flex items-center justify-center gap-1.5"
+                    >
+                      <Trash2 className="w-4 h-4" /> Batalkan Antrean
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setMyQueue(null);
+                      localStorage.removeItem('antrean_pasien');
+                      setTabAktif('ambil');
+                    }}
+                    className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center gap-2"
+                  >
+                    Ambil Antrean Baru
+                  </button>
+                )}
+
+              </div>
+            )}
+
+          </div>
+
         </div>
 
-        {/* Footer Pasien Bersih */}
-        <footer className="mt-8 text-center text-xs text-slate-400">
-          <p>© {new Date().getFullYear()} {config.namaPuskesmas}.</p>
-          <p className="text-[11px] text-slate-400/80 mt-0.5">Sistem Antrean Digital Puskesmas</p>
+        {/* Footer Pasien Universal */}
+        <footer className="mt-12 text-center text-xs text-slate-400 pb-4">
+          <p className="font-semibold text-slate-500">© {new Date().getFullYear()} {config.namaPuskesmas}.</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Sistem Antrean Cerdas Cepat & Transparan</p>
         </footer>
 
       </div>
+
+      {/* ================= MODAL TENTANG SISTEM & PANDUAN PENGGUNA ================= */}
+      {showAboutModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-lg w-full shadow-2xl border border-slate-100 max-h-[85vh] overflow-y-auto">
+            
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">Tentang Sistem Antrean Cerdas</h3>
+                  <p className="text-[11px] text-slate-400">Teknologi Pelayanan Terpadu & Universal</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAboutModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs text-slate-600 leading-relaxed">
+              <div className="p-3.5 rounded-2xl bg-teal-50/70 border border-teal-100">
+                <h4 className="font-bold text-teal-900 text-xs flex items-center gap-1.5 mb-1">
+                  <Clock className="w-3.5 h-3.5 text-teal-600" />
+                  1. Logika Perkiraan Waktu Cerdas (AI / Machine Learning)
+                </h4>
+                <p>
+                  Sistem memperhitungkan estimasi waktu tunggu secara dinamis berdasarkan jumlah orang di depan Anda dan rata-rata durasi pelayanan riil. Ketika antrean di depan telah selesai dilayani, perkiraan waktu tunggu Anda akan berkurang secara otomatis.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-100">
+                <h4 className="font-bold text-blue-900 text-xs flex items-center gap-1.5 mb-1">
+                  <Navigation className="w-3.5 h-3.5 text-blue-600" />
+                  2. Estimasi Jarak & Rute Perjalanan (OSRM Spasial)
+                </h4>
+                <p>
+                  Dengan izin lokasi, sistem membaca koordinat GPS perangkat Anda untuk menghitung jarak nyata (KM) dan perkiraan lama perjalanan ke loket, sehingga Anda dapat berangkat tepat waktu tanpa menunggu lama di ruang tunggu.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-100">
+                <h4 className="font-bold text-emerald-900 text-xs flex items-center gap-1.5 mb-1">
+                  <Volume2 className="w-3.5 h-3.5 text-emerald-600" />
+                  3. Peringatan Suara & Notifikasi PWA
+                </h4>
+                <p>
+                  Saat nomor Anda masuk dalam giliran terdekat atau dipanggil ke loket, sistem otomatis membunyikan lonceng medis dan membacakan nama serta nomor antrean Anda. Jika aplikasi dipasang (PWA), notifikasi tetap berbunyi di ponsel meskipun layar terkunci atau aplikasi diminimalkan.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-100">
+                <h4 className="font-bold text-amber-900 text-xs flex items-center gap-1.5 mb-1">
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-600" />
+                  4. Bersifat Universal & Menjaga Privasi
+                </h4>
+                <p>
+                  Sistem antrean ini dapat disesuaikan untuk berbagai jenis instansi layanan publik (puskesmas, klinik, kantor pelayanan). Daftar antrean publik hanya menampilkan nomor antrean tanpa mencantumkan identitas rahasia guna menjaga privasi pengunjung.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowAboutModal(false)}
+              className="mt-5 w-full bg-slate-900 hover:bg-black text-white font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer shadow-md"
+            >
+              Saya Mengerti
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ================= MODAL KONFIRMASI BATALKAN ANTREAN ================= */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl border border-slate-100 text-center">
             
-            <div className="w-16 h-16 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-red-100">
+            <div className="w-16 h-16 bg-rose-50 text-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-rose-100">
               <AlertTriangle className="w-8 h-8" />
             </div>
 
             <h3 className="text-lg font-black text-slate-900 mb-2">Batalkan Nomor Antrean?</h3>
             <p className="text-xs text-slate-500 mb-6 leading-relaxed">
-              Nomor <strong>{myQueue?.nomor}</strong> atas nama <strong>{myQueue?.nama}</strong> akan dibatalkan dari sistem pelayanan.
+              Nomor <strong>{myQueue?.nomor}</strong> atas nama <strong>{myQueue?.nama}</strong> akan dibatalkan dari sistem pelayanan loket.
             </p>
 
             <div className="flex gap-3">
@@ -1308,7 +1614,7 @@ export default function PatientPage() {
                 type="button"
                 onClick={konfirmasiBatalkan}
                 disabled={loading}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-2xl text-xs shadow-lg shadow-red-200 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-2xl text-xs shadow-lg shadow-rose-200 transition-all cursor-pointer flex items-center justify-center gap-1.5"
               >
                 {loading ? 'Membatalkan...' : 'Ya, Batalkan'}
               </button>

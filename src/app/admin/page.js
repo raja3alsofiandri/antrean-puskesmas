@@ -21,7 +21,11 @@ import {
   XCircle,
   Eye,
   EyeOff,
-  ShieldCheck
+  ShieldCheck,
+  Clock,
+  Smartphone,
+  Sparkles,
+  HelpCircle
 } from 'lucide-react';
 import { 
   supabase, 
@@ -63,13 +67,25 @@ export default function AdminPage() {
   });
   const [activeMenu, setActiveMenu] = useState('antrean'); // 'antrean' | 'profil' | 'laporan' | 'sandi'
 
-  // State Ganti Sandi Form
+  // State Ganti Sandi Form & Verifikasi Username
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
   const [showCurrentPass, setShowCurrentPass] = useState(false);
   const [showNewPass, setShowNewPass] = useState(false);
   const [isChangingPass, setIsChangingPass] = useState(false);
+
+  // Verifikasi Username untuk melihat password saat ini
+  const [verifyUsernameInput, setVerifyUsernameInput] = useState('');
+  const [isPassVerifiedAndRevealed, setIsPassVerifiedAndRevealed] = useState(false);
+  const [showRevealedPassword, setShowRevealedPassword] = useState(false);
+
+  // Jam Digital Realtime
+  const [realtimeClock, setRealtimeClock] = useState('');
+
+  // PWA Install Prompt di Admin
+  const [deferredAdminPrompt, setDeferredAdminPrompt] = useState(null);
+  const [isAdminAppInstalled, setIsAdminAppInstalled] = useState(false);
 
   // Toggle Suara Admin
   const [soundEnabled, setSoundEnabled] = useState(() => {
@@ -112,6 +128,94 @@ export default function AdminPage() {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToastMessage({ message, type });
     toastTimeoutRef.current = setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  // Jam Digital Realtime
+  useEffect(() => {
+    const updateClock = () => {
+      const now = new Date();
+      const hariTanggal = now.toLocaleDateString('id-ID', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
+      const jam = now.toLocaleTimeString('id-ID', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      setRealtimeClock(`${hariTanggal} • ${jam} WIB`);
+    };
+    updateClock();
+    const interval = setInterval(updateClock, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // PWA Install Event Listener di Admin
+  useEffect(() => {
+    const handleBeforeInstall = (e) => {
+      e.preventDefault();
+      setDeferredAdminPrompt(e);
+    };
+    const handleAppInstalled = () => {
+      setIsAdminAppInstalled(true);
+      setDeferredAdminPrompt(null);
+      showToast('Aplikasi Admin berhasil dipasang!', 'success');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    if (typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches) {
+      setIsAdminAppInstalled(true);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallAdminApp = async () => {
+    if (!deferredAdminPrompt) {
+      showToast('Aplikasi admin dapat dipasang melalui menu browser (Titik 3 ➔ Tambahkan ke Layar Utama / Install).', 'info');
+      return;
+    }
+    try {
+      deferredAdminPrompt.prompt();
+      const { outcome } = await deferredAdminPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setIsAdminAppInstalled(true);
+        showToast('Memasang aplikasi admin...', 'success');
+      }
+      setDeferredAdminPrompt(null);
+    } catch (err) {
+      console.warn('Admin install error:', err);
+    }
+  };
+
+  // Helper Sensor Username (Contoh: 'admin' -> 'Axxxxn')
+  const sensorUsername = (u) => {
+    if (!u) return '******';
+    const s = String(u).trim();
+    if (s.length <= 2) return s[0] + '*';
+    const first = s[0].toUpperCase();
+    const last = s[s.length - 1];
+    const mask = 'x'.repeat(Math.max(5, s.length - 2));
+    return `${first}${mask}${last}`;
+  };
+
+  // Verifikasi Username untuk membuka password saat ini
+  const handleVerifyUsernameForPassword = (e) => {
+    e.preventDefault();
+    if (verifyUsernameInput.trim().toLowerCase() === savedUsername.trim().toLowerCase()) {
+      setIsPassVerifiedAndRevealed(true);
+      showToast('Username cocok! Password saat ini berhasil dibuka.', 'success');
+    } else {
+      setIsPassVerifiedAndRevealed(false);
+      showToast('Username tidak sesuai dengan akun terdaftar!', 'alert');
+    }
   };
 
   // -------------------------------------------------------------
@@ -915,18 +1019,37 @@ export default function AdminPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+            
+            {/* Jam Digital Realtime */}
+            {realtimeClock && (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 text-slate-800 text-xs font-bold border border-slate-200 shadow-2xs">
+                <Clock className="w-3.5 h-3.5 text-teal-600 animate-pulse" />
+                <span>{realtimeClock}</span>
+              </div>
+            )}
+
             {/* Toggle Suara Admin */}
             <button
               onClick={toggleSound}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
                 soundEnabled
                   ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
                   : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
               }`}
               title="Toggle Suara Pemanggilan"
             >
-              {soundEnabled ? <Volume2 className="w-4 h-4 text-blue-600" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
-              <span>{soundEnabled ? 'Suara Loket: ON' : 'Suara Loket: OFF'}</span>
+              {soundEnabled ? <Volume2 className="w-3.5 h-3.5 text-blue-600" /> : <VolumeX className="w-3.5 h-3.5 text-slate-400" />}
+              <span>{soundEnabled ? 'Suara: ON' : 'Suara: OFF'}</span>
+            </button>
+
+            {/* Tombol Install App PWA Admin */}
+            <button
+              onClick={handleInstallAdminApp}
+              className="bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold px-3 py-1.5 rounded-xl border border-teal-200 transition-all cursor-pointer flex items-center gap-1"
+              title="Pasang Aplikasi Web Loket di Desktop/HP"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-teal-600" />
+              <span>{isAdminAppInstalled ? 'PWA Terpasang' : 'Pasang App'}</span>
             </button>
 
             {/* Buka Layar Pasien di TAB BARU */}
@@ -934,7 +1057,7 @@ export default function AdminPage() {
               href="/"
               target="_blank"
               rel="noopener noreferrer"
-              className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3.5 py-2 rounded-xl transition-all flex items-center gap-1 cursor-pointer"
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 cursor-pointer"
             >
               Layar Pasien ↗
             </a>
@@ -945,7 +1068,7 @@ export default function AdminPage() {
                 setIsLoggedIn(false);
                 sessionStorage.removeItem('admin_is_logged_in');
               }}
-              className="bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold px-3.5 py-2 rounded-xl border border-red-200 transition-all cursor-pointer flex items-center gap-1"
+              className="bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-bold px-3 py-1.5 rounded-xl border border-rose-200 transition-all cursor-pointer flex items-center gap-1"
             >
               <LogOut className="w-3.5 h-3.5" /> Keluar
             </button>
@@ -1501,107 +1624,196 @@ export default function AdminPage() {
 
         {/* ================= TAB 4: GANTI SANDI ADMIN ================= */}
         {activeMenu === 'sandi' && (
-          <div className="max-w-xl mx-auto bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-8">
-            <div className="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
-              <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
-                <Key className="w-6 h-6" />
-              </div>
-              <div>
-                <h2 className="font-black text-slate-900 text-lg">Keamanan & Sandi Loket</h2>
-                <p className="text-xs text-slate-400">Kata sandi tersimpan dan tersinkronisasi di Supabase</p>
-              </div>
-            </div>
-
-            {/* Info Akun Aktif */}
-            <div className="bg-teal-50/70 border border-teal-100 rounded-2xl p-4 mb-6 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <ShieldCheck className="w-5 h-5 text-teal-600 shrink-0" />
+          <div className="max-w-2xl mx-auto space-y-6">
+            
+            {/* Header Tab Sandi */}
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-7">
+              <div className="flex items-center gap-3.5 pb-4 border-b border-slate-100">
+                <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0 border border-teal-100 shadow-2xs">
+                  <Key className="w-6 h-6" />
+                </div>
                 <div>
-                  <p className="text-xs font-bold text-teal-950">Username Petugas: {savedUsername}</p>
-                  <p className="text-[11px] text-teal-700">Tersinkronisasi otomatis dengan server Supabase</p>
+                  <h2 className="font-black text-slate-900 text-lg">Keamanan & Sandi Loket Petugas</h2>
+                  <p className="text-xs text-slate-400">Kelola dan perbarui kredensial akses panel loket secara aman</p>
+                </div>
+              </div>
+
+              {/* 1. Username Terdaftar (Disensor) */}
+              <div className="mt-5 bg-teal-50/70 border border-teal-100 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="w-5 h-5 text-teal-600 shrink-0" />
+                  <div>
+                    <p className="text-xs font-bold text-teal-950">
+                      Username Akun Petugas:
+                    </p>
+                    <p className="text-[11px] text-teal-700">
+                      Tersensor demi privasi & tersinkronisasi di Supabase
+                    </p>
+                  </div>
+                </div>
+
+                <div className="inline-flex items-center gap-1.5 bg-white border border-teal-200 px-3.5 py-1.5 rounded-xl shadow-2xs">
+                  <span className="text-[11px] text-slate-400 font-bold">Username:</span>
+                  <span className="font-mono font-black text-teal-800 text-xs tracking-wider">
+                    {sensorUsername(savedUsername)}
+                  </span>
                 </div>
               </div>
             </div>
 
-            <form onSubmit={handleUpdatePassword} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                  Password Saat Ini
-                </label>
-                <div className="relative">
+            {/* 2. FITUR INTIP / CEK PASSWORD SAAT INI (Wajib Input Username Dulu) */}
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-7">
+              <div className="flex items-center gap-2 mb-2">
+                <Eye className="w-4 h-4 text-teal-600" />
+                <h3 className="text-sm font-bold text-slate-800">
+                  Lihat Kata Sandi Saat Ini
+                </h3>
+              </div>
+              <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                Untuk alasan keamanan, masukkan username akun Anda dengan benar untuk membuka kata sandi saat ini.
+              </p>
+
+              <form onSubmit={handleVerifyUsernameForPassword} className="space-y-3">
+                <div className="flex flex-col sm:flex-row gap-2">
                   <input
-                    type={showCurrentPass ? 'text' : 'password'}
-                    value={currentPass}
-                    onChange={(e) => setCurrentPass(e.target.value)}
-                    placeholder="Masukkan password lama"
-                    className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium pr-11"
+                    type="text"
+                    value={verifyUsernameInput}
+                    onChange={(e) => {
+                      setVerifyUsernameInput(e.target.value);
+                      setIsPassVerifiedAndRevealed(false);
+                    }}
+                    placeholder={`Ketik username asli (contoh: ${savedUsername ? savedUsername[0] : 'a'}...)`}
+                    className="flex-1 px-4 py-2.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
                     required
                   />
                   <button
-                    type="button"
-                    onClick={() => setShowCurrentPass(!showCurrentPass)}
-                    className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    type="submit"
+                    className="bg-slate-900 hover:bg-black text-white px-5 py-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-sm shrink-0 flex items-center justify-center gap-1.5"
                   >
-                    {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    <ShieldCheck className="w-4 h-4 text-teal-400" />
+                    Buka Sandi
                   </button>
                 </div>
+              </form>
+
+              {/* Tampilan Sandi Jika Username Terverifikasi */}
+              {isPassVerifiedAndRevealed ? (
+                <div className="mt-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 animate-fade-in flex items-center justify-between">
+                  <div>
+                    <p className="text-[11px] font-bold text-emerald-900">Kata Sandi Saat Ini Terbuka:</p>
+                    <p className="font-mono text-base font-black text-emerald-950 tracking-wider mt-0.5">
+                      {showRevealedPassword ? savedPass : '••••••••••••'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowRevealedPassword(!showRevealedPassword)}
+                    className="inline-flex items-center gap-1 bg-white hover:bg-emerald-100 text-emerald-800 px-3 py-1.5 rounded-xl border border-emerald-200 text-xs font-bold cursor-pointer transition-all shadow-2xs"
+                  >
+                    {showRevealedPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    <span>{showRevealedPassword ? 'Sembunyikan' : 'Tampilkan'}</span>
+                  </button>
+                </div>
+              ) : verifyUsernameInput && (
+                <p className="text-[11px] text-slate-400 mt-2 italic">
+                  * Ketikkan username akun yang cocok lalu klik &quot;Buka Sandi&quot;.
+                </p>
+              )}
+            </div>
+
+            {/* 3. FORM GANTI PASSWORD BARU */}
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6 sm:p-7">
+              <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-100">
+                <Key className="w-4 h-4 text-teal-600" />
+                <h3 className="text-sm font-bold text-slate-800">
+                  Perbarui Kata Sandi Baru
+                </h3>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                  Password Baru (Min. 6 Karakter)
-                </label>
-                <div className="relative">
+              <form onSubmit={handleUpdatePassword} className="space-y-4">
+                {/* 1. Password Saat Ini */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                    1. Masukkan Password Saat Ini
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showCurrentPass ? 'text' : 'password'}
+                      value={currentPass}
+                      onChange={(e) => setCurrentPass(e.target.value)}
+                      placeholder="Masukkan password saat ini yang aktif"
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium pr-11"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPass(!showCurrentPass)}
+                      className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Password Baru */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                    2. Password Baru (Min. 6 Karakter)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showNewPass ? 'text' : 'password'}
+                      value={newPass}
+                      onChange={(e) => setNewPass(e.target.value)}
+                      placeholder="Ketik password baru"
+                      className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium pr-11"
+                      required
+                      minLength={6}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPass(!showNewPass)}
+                      className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      {showNewPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3. Konfirmasi Password Baru */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                    3. Konfirmasi Ulang Password Baru
+                  </label>
                   <input
-                    type={showNewPass ? 'text' : 'password'}
-                    value={newPass}
-                    onChange={(e) => setNewPass(e.target.value)}
-                    placeholder="Masukkan password baru"
-                    className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium pr-11"
+                    type="password"
+                    value={confirmPass}
+                    onChange={(e) => setConfirmPass(e.target.value)}
+                    placeholder="Ketik ulang persis password baru di atas"
+                    className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
                     required
                     minLength={6}
                   />
+                </div>
+
+                <div className="pt-2">
                   <button
-                    type="button"
-                    onClick={() => setShowNewPass(!showNewPass)}
-                    className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    type="submit"
+                    disabled={isChangingPass}
+                    className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-2xl text-xs shadow-md shadow-teal-600/20 cursor-pointer transition-all flex items-center justify-center gap-2"
                   >
-                    {showNewPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {isChangingPass ? (
+                      'Menyimpan Sandi ke Supabase...'
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" /> Simpan Perubahan Sandi Baru
+                      </>
+                    )}
                   </button>
                 </div>
-              </div>
+              </form>
+            </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                  Konfirmasi Password Baru
-                </label>
-                <input
-                  type="password"
-                  value={confirmPass}
-                  onChange={(e) => setConfirmPass(e.target.value)}
-                  placeholder="Ketik ulang password baru"
-                  className="w-full px-4 py-3 rounded-2xl bg-slate-50 border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 font-medium"
-                  required
-                  minLength={6}
-                />
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  disabled={isChangingPass}
-                  className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-2xl text-xs shadow-md shadow-teal-600/20 cursor-pointer transition-all flex items-center justify-center gap-2"
-                >
-                  {isChangingPass ? (
-                    'Menyimpan ke Supabase...'
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" /> Simpan Sandi Baru ke Supabase
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
           </div>
         )}
 
