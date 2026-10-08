@@ -134,7 +134,7 @@ export async function calculateOSRMRoute(userLat, userLon, destLat, destLon) {
           waktuTempuh: `± ${menit} Menit`,
           rawKm: km,
           rawMenit: menit,
-          metode: 'OSRM Riil',
+          metode: 'Rute Lokasi',
         };
       }
     }

@@ -635,7 +635,7 @@ export default function PatientPage() {
     if (myQueue.status === 'MEMANGGIL') return 'Sekarang';
     const mnt = hitungEstimasiMenitRealtime();
     const targetDate = new Date(Date.now() + mnt * 60000);
-    return targetDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+    return targetDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
   }, [myQueue, allQueues]);
 
   // Efek Notifikasi Peringatan Bersiap (Suara Bip Medis & Notifikasi PWA di HP)
@@ -886,35 +886,43 @@ export default function PatientPage() {
       </div>
 
       {/* 1. Switch Suara Panggilan & Notifikasi */}
-      <div className="flex items-center justify-between p-3 rounded-2xl border border-slate-200/70 bg-slate-50/80 transition-colors">
+      <div className={`flex items-center justify-between p-3 rounded-2xl border transition-colors ${
+        soundEnabled
+          ? 'bg-teal-50/80 border-teal-200/70'
+          : 'bg-slate-50/80 border-slate-200/70'
+      }`}>
         <div className="flex items-center gap-3">
           <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${
-            soundEnabled 
-              ? 'bg-teal-100 text-teal-700 border border-teal-200' 
+            soundEnabled
+              ? 'bg-teal-600 text-white shadow-sm'
               : 'bg-slate-200 text-slate-500 border border-slate-300'
           }`}>
             {soundEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
           </div>
           <div>
-            <p className="text-xs font-bold text-slate-800">
-              Suara Panggilan Loket
-            </p>
-            <p className="text-[11px] text-slate-400">
-              {soundEnabled ? 'Aktif (Bip nada medis + TTS)' : 'Senyap (Hanya visual layar)'}
+            <p className="text-xs font-bold text-slate-800">Suara Panggilan Loket</p>
+            <p className={`text-[11px] font-medium ${soundEnabled ? 'text-teal-700' : 'text-slate-400'}`}>
+              {soundEnabled ? 'Aktif · Izin diberikan' : 'Ketuk switch untuk izinkan suara'}
             </p>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={toggleSound}
-          className={`w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-300 ${
-            soundEnabled ? 'bg-teal-600 justify-end' : 'bg-slate-300 justify-start'
-          }`}
-          title={soundEnabled ? 'Nonaktifkan suara' : 'Aktifkan suara'}
-        >
-          <div className="w-4 h-4 bg-white rounded-full shadow-md transform transition-transform" />
-        </button>
+        {soundEnabled ? (
+          /* Jika sudah aktif: tampilkan badge saja, tidak bisa dimatikan lewat switch */
+          <span className="text-[10px] font-black text-teal-700 bg-teal-100 border border-teal-200 px-2.5 py-1 rounded-full">
+            ON
+          </span>
+        ) : (
+          /* Jika belum aktif: tampilkan switch untuk meminta izin */
+          <button
+            type="button"
+            onClick={toggleSound}
+            className="w-12 h-6 flex items-center rounded-full p-1 cursor-pointer transition-colors duration-300 bg-slate-300 justify-start"
+            title="Ketuk untuk mengizinkan suara panggilan"
+          >
+            <div className="w-4 h-4 bg-white rounded-full shadow-md transform transition-transform" />
+          </button>
+        )}
       </div>
 
       {/* 2. Tombol Pasang Aplikasi (PWA) */}
@@ -1484,19 +1492,25 @@ export default function PatientPage() {
 
                   {/* Status badge bawah */}
                   {myQueue.status !== 'SELESAI' && (
-                    <div className={`mt-3 px-3.5 py-2.5 rounded-2xl flex items-center justify-between border ${
-                      myQueue.status === 'MEMANGGIL' 
-                        ? 'bg-blue-50 border-blue-200 text-blue-900' 
-                        : hitungAntreanDiDepan() < 5 
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-900' 
-                        : 'bg-white border-slate-200/70 text-slate-700'
+                    <div className={`mt-3 px-4 py-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 ${
+                      myQueue.status === 'MEMANGGIL'
+                        ? 'bg-blue-50 border-blue-200'
+                        : hitungAntreanDiDepan() < 5
+                        ? 'bg-emerald-50 border-emerald-200'
+                        : 'bg-white border-slate-200/70'
                     }`}>
-                      <span className="text-[11px] font-medium truncate mr-2">
+                      {/* Teks utama — tengah di mobile, kiri di desktop */}
+                      <p className={`text-sm font-medium leading-snug text-center sm:text-left ${
+                        myQueue.status === 'MEMANGGIL' ? 'text-blue-900'
+                        : hitungAntreanDiDepan() < 5 ? 'text-emerald-900'
+                        : 'text-slate-700'
+                      }`}>
                         {myQueue.status === 'MEMANGGIL'
                           ? 'Nomor Anda sedang dipanggil ke loket'
-                          : `Diusahakan hadir sebelum pukul ${hitungBatasWaktuKedatangan()}`}
-                      </span>
-                      <span className={`text-[10px] font-black px-2.5 py-1 rounded-full shrink-0 ${
+                          : <>Hadir sebelum pukul <strong>{hitungBatasWaktuKedatangan()}</strong> WIB</>}
+                      </p>
+                      {/* Badge status — full width tengah di mobile, auto di desktop */}
+                      <span className={`w-full text-center sm:w-auto sm:self-auto shrink-0 text-[11px] font-black px-3 py-1.5 rounded-full whitespace-nowrap ${
                         myQueue.status === 'MEMANGGIL'
                           ? 'bg-blue-600 text-white animate-pulse'
                           : hitungAntreanDiDepan() === 0
@@ -1550,7 +1564,7 @@ export default function PatientPage() {
                   {/* 2 Mini-cards sejajar */}
                   <div className="grid grid-cols-2 gap-2.5">
                     <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Jarak Tempuh</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Jarak Tempuh Lokasi</p>
                       <p className="text-xl font-black text-slate-900 leading-none mt-0.5">{gpsData.jarakKm}</p>
                       <p className="text-[10px] text-slate-400 mt-1 font-medium">{gpsData.metode}</p>
                     </div>
