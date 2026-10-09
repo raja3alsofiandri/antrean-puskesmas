@@ -41,7 +41,7 @@ import {
   playNotificationChime,
   unlockAudio
 } from '@/lib/pwa';
-import { ejaNomorAntrean, ucapkanBerpseci, susunFrasaPanggilan } from '@/lib/tts';
+import { ejaNomorAntrean, ucapkanBerpseci, ucapkanSuaraManusia, susunKalimatPanggilan, stopAllSpeech } from '@/lib/tts';
 
 export default function PatientPage() {
   // -------------------------------------------------------------
@@ -204,33 +204,29 @@ export default function PatientPage() {
         showToast('Suara notifikasi & panggilan DIAKTIFKAN 🔊', 'success');
       }
     } else {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
+      stopAllSpeech();
       showToast('Suara panggilan DINONAKTIFKAN (Mode Senyap) 🔇', 'info');
     }
   };
 
-  // Suara Panggilan Realtime (Bip Medis Dilanjutkan Membaca Nomor Antrean dan Nama Pasien)
+  // Suara Panggilan Realtime (Bip Medis Dilanjutkan Membaca Nomor Antrean dan Nama Pasien dengan Suara Manusia Asli)
   const playCallingVoice = useCallback((nomor, namaPasien, panggilanKe = 1) => {
     if (!soundEnabled) return;
 
     // 1. Bunyikan nada bip lonceng medis klinis
     playNotificationChime();
 
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-
     try {
-      window.speechSynthesis.cancel();
+      stopAllSpeech();
 
-      // Frasa pendek dengan jeda alami antar frasa (bukan satu kalimat panjang penuh koma)
-      const frasa = susunFrasaPanggilan(nomor, namaPasien, panggilanKe);
+      // Kalimat pemanggilan natural formal klinis
+      const kalimat = susunKalimatPanggilan(nomor, namaPasien, panggilanKe);
 
       setTimeout(() => {
-        ucapkanBerpseci(frasa);
+        ucapkanSuaraManusia(kalimat);
       }, 550);
     } catch (err) {
-      console.warn('Gagal membunyikan Text-to-Speech panggilan:', err);
+      console.warn('Gagal membunyikan suara panggilan:', err);
     }
   }, [soundEnabled]);
 
@@ -241,25 +237,19 @@ export default function PatientPage() {
     // 1. Bunyikan nada bip lonceng medis klinis
     playNotificationChime();
 
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-
     try {
-      window.speechSynthesis.cancel();
+      stopAllSpeech();
 
       const nomorUcap = ejaNomorAntrean(nomor);
       const nama = String(namaPasien || '').trim();
       const batas = String(batasWaktu || '').trim();
 
-      const frasa = [
-        'Pemberitahuan',
-        `nomor antrean ${nomorUcap}`,
-        `atas nama ${nama}`,
-        sisaAntrean === 0 ? 'giliran Anda berikutnya' : `antrean Anda tersisa ${sisaAntrean} orang lagi`,
-        batas ? `harap bersiap menuju loket sebelum pukul ${batas}` : 'harap bersiap menuju loket',
-      ];
+      const kalimat = `Pemberitahuan, nomor antrean ${nomorUcap}${nama ? `, atas nama ${nama}` : ''}. ${
+        sisaAntrean === 0 ? 'Giliran Anda berikutnya' : `Antrean Anda tersisa ${sisaAntrean} orang lagi`
+      }. ${batas ? `Harap bersiap menuju loket sebelum pukul ${batas}.` : 'Harap bersiap menuju loket.'}`;
 
       setTimeout(() => {
-        ucapkanBerpseci(frasa);
+        ucapkanSuaraManusia(kalimat);
       }, 550);
     } catch (err) {
       console.warn('Gagal membunyikan Text-to-Speech persiapan:', err);

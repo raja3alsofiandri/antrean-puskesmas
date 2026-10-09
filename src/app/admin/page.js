@@ -45,7 +45,7 @@ import {
   playNotificationChime,
   unlockAudio
 } from '@/lib/pwa';
-import { susunFrasaPanggilan, ucapkanBerpseci } from '@/lib/tts';
+import { susunKalimatPanggilan, ucapkanSuaraManusia, stopAllSpeech } from '@/lib/tts';
 
 export default function AdminPage() {
   // -------------------------------------------------------------
@@ -206,6 +206,7 @@ export default function AdminPage() {
       playNotificationChime();
       showToast('Suara pemanggilan loket aktif 🔊', 'success');
     } else {
+      stopAllSpeech();
       showToast('Suara pemanggilan dinonaktifkan (mode senyap) 🔇', 'info');
     }
   };
@@ -274,18 +275,16 @@ export default function AdminPage() {
   const panggilPasienTTS = useCallback((nomor, nama, panggilanKe = 1) => {
     if (!soundEnabled) return;
 
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-
     try {
-      window.speechSynthesis.cancel();
+      stopAllSpeech();
 
-      // Frasa sama dengan halaman pasien agar pengumuman seragam
-      const frasa = susunFrasaPanggilan(nomor, nama, panggilanKe);
+      // Kalimat pengumuman natural formal klinis
+      const kalimat = susunKalimatPanggilan(nomor, nama, panggilanKe);
 
-      // Chime dulu (notifikasi medis), lalu suara panggilan 550ms kemudian
+      // Chime lonceng medis, lalu suara manusia asli 550ms kemudian
       playNotificationChime();
       setTimeout(() => {
-        ucapkanBerpseci(frasa);
+        ucapkanSuaraManusia(kalimat);
       }, 550);
     } catch (e) {
       console.warn('TTS Admin error:', e);

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
 import { playNotificationChime, unlockAudio } from '@/lib/pwa';
+import { susunKalimatPanggilan, ucapkanSuaraManusia } from '@/lib/tts';
 
 export default function DisplayPage() {
   const [isMounted, setIsMounted] = useState(false);
@@ -87,7 +88,16 @@ export default function DisplayPage() {
           const selesai = antreanData.filter(q => q.status === 'SELESAI');
           if (memanggil && memanggil.nomor !== lastCalledNomorRef.current) {
             lastCalledNomorRef.current = memanggil.nomor;
-            setConfig(prev => { if (prev.displaySoundEnabled) playNotificationChime(); return prev; });
+            setConfig(prev => {
+              if (prev.displaySoundEnabled) {
+                playNotificationChime();
+                const kalimat = susunKalimatPanggilan(memanggil.nomor, memanggil.nama, memanggil.panggilan_ke || 1);
+                setTimeout(() => {
+                  ucapkanSuaraManusia(kalimat);
+                }, 550);
+              }
+              return prev;
+            });
             let count = 0;
             clearInterval(flashIntervalRef.current);
             setFlashCall(true);
