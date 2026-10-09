@@ -41,6 +41,7 @@ import {
   playNotificationChime,
   unlockAudio
 } from '@/lib/pwa';
+import { ejaNomorAntrean, ucapkanBerpseci, susunFrasaPanggilan } from '@/lib/tts';
 
 export default function PatientPage() {
   // -------------------------------------------------------------
@@ -222,24 +223,11 @@ export default function PatientPage() {
     try {
       window.speechSynthesis.cancel();
 
-      const intro = panggilanKe > 1 ? 'Panggilan ulang. ' : '';
-      const nomorSpelled = (nomor || '').replace(/([A-Za-z])(\d+)/, '$1 $2');
-      const kalimat = `${intro}Nomor antrean, ${nomorSpelled}, atas nama, ${namaPasien}, silakan menuju ke loket pemeriksaan sekarang.`;
-      
-      const utterance = new SpeechSynthesisUtterance(kalimat);
-      utterance.lang = 'id-ID';
-      utterance.rate = 0.88;
-      utterance.pitch = 1.05;
-
-      const voices = window.speechSynthesis.getVoices();
-      const idVoice = voices.find((v) => 
-        (v.lang && (v.lang === 'id-ID' || v.lang.startsWith('id'))) ||
-        (v.name && (v.name.toLowerCase().includes('indonesia') || v.name.toLowerCase().includes('id-id') || v.name.toLowerCase().includes('gadis') || v.name.toLowerCase().includes('damayanti')))
-      );
-      if (idVoice) utterance.voice = idVoice;
+      // Frasa pendek dengan jeda alami antar frasa (bukan satu kalimat panjang penuh koma)
+      const frasa = susunFrasaPanggilan(nomor, namaPasien, panggilanKe);
 
       setTimeout(() => {
-        window.speechSynthesis.speak(utterance);
+        ucapkanBerpseci(frasa);
       }, 550);
     } catch (err) {
       console.warn('Gagal membunyikan Text-to-Speech panggilan:', err);
@@ -258,26 +246,20 @@ export default function PatientPage() {
     try {
       window.speechSynthesis.cancel();
 
-      const nomorSpelled = (nomor || '').replace(/([A-Za-z])(\d+)/, '$1 $2');
-      const infoSisa = sisaAntrean === 0 
-        ? 'giliran Anda berikutnya' 
-        : `antrean Anda tersisa ${sisaAntrean} orang lagi di depan`;
-      const kalimat = `Pemberitahuan layanan antrean. Nomor antrean ${nomorSpelled}, atas nama ${namaPasien}, ${infoSisa}. Harap bersiap menuju loket sebelum pukul ${batasWaktu} agar tidak terlewat.`;
+      const nomorUcap = ejaNomorAntrean(nomor);
+      const nama = String(namaPasien || '').trim();
+      const batas = String(batasWaktu || '').trim();
 
-      const utterance = new SpeechSynthesisUtterance(kalimat);
-      utterance.lang = 'id-ID';
-      utterance.rate = 0.88;
-      utterance.pitch = 1.05;
-
-      const voices = window.speechSynthesis.getVoices();
-      const idVoice = voices.find((v) => 
-        (v.lang && (v.lang === 'id-ID' || v.lang.startsWith('id'))) ||
-        (v.name && (v.name.toLowerCase().includes('indonesia') || v.name.toLowerCase().includes('id-id') || v.name.toLowerCase().includes('gadis') || v.name.toLowerCase().includes('damayanti')))
-      );
-      if (idVoice) utterance.voice = idVoice;
+      const frasa = [
+        'Pemberitahuan',
+        `nomor antrean ${nomorUcap}`,
+        `atas nama ${nama}`,
+        sisaAntrean === 0 ? 'giliran Anda berikutnya' : `antrean Anda tersisa ${sisaAntrean} orang lagi`,
+        batas ? `harap bersiap menuju loket sebelum pukul ${batas}` : 'harap bersiap menuju loket',
+      ];
 
       setTimeout(() => {
-        window.speechSynthesis.speak(utterance);
+        ucapkanBerpseci(frasa);
       }, 550);
     } catch (err) {
       console.warn('Gagal membunyikan Text-to-Speech persiapan:', err);

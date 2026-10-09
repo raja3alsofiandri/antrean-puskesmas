@@ -45,6 +45,7 @@ import {
   playNotificationChime,
   unlockAudio
 } from '@/lib/pwa';
+import { susunFrasaPanggilan, ucapkanBerpseci } from '@/lib/tts';
 
 export default function AdminPage() {
   // -------------------------------------------------------------
@@ -277,26 +278,14 @@ export default function AdminPage() {
 
     try {
       window.speechSynthesis.cancel();
-      const prefix = panggilanKe > 1 ? 'Panggilan ulang. ' : '';
-      const nomorSpelled = (nomor || '').replace(/([A-Za-z])(\d+)/, '$1 $2');
-      const text = `${prefix}Nomor antrean, ${nomorSpelled}, atas nama, ${nama}, silakan menuju ke loket pemeriksaan sekarang.`;
-      
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'id-ID';
-      utterance.rate = 0.88;
-      utterance.pitch = 1.05;
 
-      const voices = window.speechSynthesis.getVoices();
-      const idVoice = voices.find((v) => 
-        (v.lang && (v.lang === 'id-ID' || v.lang.startsWith('id'))) ||
-        (v.name && (v.name.toLowerCase().includes('indonesia') || v.name.toLowerCase().includes('id-id') || v.name.toLowerCase().includes('gadis') || v.name.toLowerCase().includes('damayanti')))
-      );
-      if (idVoice) utterance.voice = idVoice;
+      // Frasa sama dengan halaman pasien agar pengumuman seragam
+      const frasa = susunFrasaPanggilan(nomor, nama, panggilanKe);
 
       // Chime dulu (notifikasi medis), lalu suara panggilan 550ms kemudian
       playNotificationChime();
       setTimeout(() => {
-        window.speechSynthesis.speak(utterance);
+        ucapkanBerpseci(frasa);
       }, 550);
     } catch (e) {
       console.warn('TTS Admin error:', e);
