@@ -1,0 +1,12 @@
+{
+  "versi": "vDefault_Awal",
+  "fitur": [
+    "antrean_di_depan",
+    "rata_waktu_pelayanan",
+    "jam_daftar"
+  ],
+  "total_sampel": 0,
+  "status": "RESET_BERSIH",
+  "keterangan": "Model menggunakan estimasi adaptif bawaan.",
+  "waktu_reset": "2026-10-16T14:20:42.135079"
+}

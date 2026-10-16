@@ -1,4 +1,4 @@
-// Service Worker for Antrean Puskesmas PWA
+// Service Worker for Antrean Universal PWA
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
@@ -30,7 +30,7 @@ self.addEventListener('message', (event) => {
 
 // Handle push notification
 self.addEventListener('push', (event) => {
-  let data = { title: 'Panggilan Antrean Puskesmas!', body: 'Nomor antrean Anda sedang dipanggil.' };
+  let data = { title: 'Panggilan Antrean Pelayanan!', body: 'Nomor antrean Anda sedang dipanggil.' };
   if (event.data) {
     try {
       data = event.data.json();

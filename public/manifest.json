@@ -1,7 +1,7 @@
 {
-  "name": "Antrean Puskesmas Kuala Cenaku",
-  "short_name": "Antrean",
-  "description": "Sistem Antrean Digital Puskesmas Kuala Cenaku",
+  "name": "Antrean Cerdas - Sistem Antrean Digital Universal",
+  "short_name": "Antrean Cerdas",
+  "description": "Sistem Antrean Digital Universal untuk Berbagai Layanan",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f8fafc",

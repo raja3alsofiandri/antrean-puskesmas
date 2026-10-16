@@ -104,8 +104,8 @@ export async function sendSystemNotification(title, body) {
 }
 
 /**
- * Memainkan nada bip lonceng medis klinis (Harmonik 3-Nada Lembut: E5 -> G5 -> C6)
- * Khas suara pengumuman rumah sakit / puskesmas
+ * Memainkan nada bip lonceng loket (Harmonik 3-Nada Lembut: E5 -> G5 -> C6)
+ * Khas suara pengumuman loket pelayanan publik dan instansi
  */
 export function playNotificationChime() {
   if (typeof window === 'undefined') return;

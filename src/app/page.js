@@ -25,14 +25,19 @@ import {
   MapPin,
   ShieldCheck,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Megaphone
 } from 'lucide-react';
 import { 
   supabase, 
   isSupabaseConfigured, 
   generateNextQueueNumber,
   calculateOSRMRoute,
-  calculateHaversineDistance
+  calculateHaversineDistance,
+  registerQueueAtomic,
+  batalkanAntreanAman,
+  recordMLRegistration,
+  DEFAULT_TENANT_ID
 } from '@/lib/supabaseClient';
 import { 
   registerServiceWorker, 
@@ -41,9 +46,14 @@ import {
   playNotificationChime,
   unlockAudio
 } from '@/lib/pwa';
-import { ejaNomorAntrean, ucapkanBerpseci, ucapkanSuaraManusia, susunKalimatPanggilan, stopAllSpeech } from '@/lib/tts';
+import { 
+  ucapkanSuaraManusia, 
+  susunKalimatPanggilan, 
+  susunKalimatPeringatan, 
+  stopAllSpeech 
+} from '@/lib/tts';
 
-export default function PatientPage() {
+export default function HalamanPengunjung() {
   // -------------------------------------------------------------
   // State Input & Navigasi Tab
   // -------------------------------------------------------------
@@ -64,7 +74,7 @@ export default function PatientPage() {
   const [showPwaInstallGuideModal, setShowPwaInstallGuideModal] = useState(false);
 
   // -------------------------------------------------------------
-  // State Antrean Pasien Aktif & Publik
+  // State Antrean Pengunjung Aktif & Publik
   // -------------------------------------------------------------
   const [myQueue, setMyQueue] = useState(null);
   const [tampilkanTiket, setTampilkanTiket] = useState(true); // Toggle lihat tiket vs halaman input
@@ -84,14 +94,14 @@ export default function PatientPage() {
   });
 
   // -------------------------------------------------------------
-  // State Konfigurasi Puskesmas (Default Bersih Tanpa Foto Bawaan)
+  // State Konfigurasi Organisasi / Layanan (Default Bersih Universal)
   // -------------------------------------------------------------
   const [config, setConfig] = useState({
-    namaPuskesmas: 'Puskesmas Kuala Cenaku',
-    alamatPuskesmas: 'Jl. Kesehatan No. 1, Kuala Cenaku, Kab. Indragiri Hulu, Riau',
-    logoUrl: '🏥',
-    fotoPuskesmasUrl: '', // Latar belakang awal putih bersih
-    infoPenting: 'Wajib membawa KTP atau Kartu Keluarga (KK) fisik saat datang ke loket. Toleransi keterlambatan maksimal 15 Menit.',
+    namaOrganisasi: process.env.NEXT_PUBLIC_ORGANISASI_NAMA || 'Loket Pelayanan Terpadu',
+    alamatOrganisasi: process.env.NEXT_PUBLIC_ORGANISASI_ALAMAT || 'Jl. Pelayanan Publik No. 1, Kota Layanan',
+    logoUrl: '🏢',
+    fotoOrganisasiUrl: '',
+    infoPenting: 'Wajib membawa identitas diri atau bukti registrasi fisik saat datang ke loket. Toleransi keterlambatan maksimal 15 Menit.',
     statusBuka: true,
     pengumumanDarurat: '',
     latitude: -0.5282,
@@ -111,7 +121,7 @@ export default function PatientPage() {
   };
 
   // -------------------------------------------------------------
-  // 1. Text-To-Speech & Notifikasi Suara (Bip Medis + Suara Pasien)
+  // 1. Text-To-Speech & Notifikasi Suara Pemanggilan Loket
   // -------------------------------------------------------------
   useEffect(() => {
     unlockAudio();
@@ -209,51 +219,32 @@ export default function PatientPage() {
     }
   };
 
-  // Suara Panggilan Realtime (Bip Medis Dilanjutkan Membaca Nomor Antrean dan Nama Pasien dengan Suara Manusia Asli)
-  const playCallingVoice = useCallback((nomor, namaPasien, panggilanKe = 1) => {
+  // Suara Panggilan Realtime (Google TTS + Fallback Browser)
+  const playCallingVoice = useCallback((nomor, namaPengunjung, panggilanKe = 1) => {
     if (!soundEnabled) return;
 
-    // 1. Bunyikan nada bip lonceng medis klinis
+    // 1. Bunyikan nada lonceng loket
     playNotificationChime();
 
-    try {
-      stopAllSpeech();
-
-      // Kalimat pemanggilan natural formal klinis
-      const kalimat = susunKalimatPanggilan(nomor, namaPasien, panggilanKe);
-
-      setTimeout(() => {
-        ucapkanSuaraManusia(kalimat);
-      }, 550);
-    } catch (err) {
-      console.warn('Gagal membunyikan suara panggilan:', err);
-    }
+    // 2. Susun kalimat dan ucapkan dengan suara manusia (Google TTS → fallback browser)
+    const kalimat = susunKalimatPanggilan(nomor, namaPengunjung, panggilanKe);
+    ucapkanSuaraManusia(kalimat, { delayMs: 550 }).catch((err) => {
+      console.warn('TTS playCallingVoice error:', err);
+    });
   }, [soundEnabled]);
 
-  // Suara Notifikasi Kesehatan & Peringatan Waktu Tiba (Saat Masuk Panggilan Bersiap)
-  const playPeringatanLimaBesarVoice = useCallback((nomor, namaPasien, batasWaktu, sisaAntrean = 4) => {
+  // Suara Notifikasi Peringatan Waktu Tiba (Google TTS + Fallback Browser)
+  const playPeringatanLimaBesarVoice = useCallback((nomor, namaPengunjung, batasWaktu, sisaAntrean = 4) => {
     if (!soundEnabled) return;
 
-    // 1. Bunyikan nada bip lonceng medis klinis
+    // 1. Bunyikan nada lonceng loket
     playNotificationChime();
 
-    try {
-      stopAllSpeech();
-
-      const nomorUcap = ejaNomorAntrean(nomor);
-      const nama = String(namaPasien || '').trim();
-      const batas = String(batasWaktu || '').trim();
-
-      const kalimat = `Pemberitahuan, nomor antrean ${nomorUcap}${nama ? `, atas nama ${nama}` : ''}. ${
-        sisaAntrean === 0 ? 'Giliran Anda berikutnya' : `Antrean Anda tersisa ${sisaAntrean} orang lagi`
-      }. ${batas ? `Harap bersiap menuju loket sebelum pukul ${batas}.` : 'Harap bersiap menuju loket.'}`;
-
-      setTimeout(() => {
-        ucapkanSuaraManusia(kalimat);
-      }, 550);
-    } catch (err) {
-      console.warn('Gagal membunyikan Text-to-Speech persiapan:', err);
-    }
+    // 2. Susun kalimat peringatan dan ucapkan
+    const kalimat = susunKalimatPeringatan(nomor, namaPengunjung, batasWaktu, sisaAntrean);
+    ucapkanSuaraManusia(kalimat, { delayMs: 550 }).catch((err) => {
+      console.warn('TTS playPeringatanLimaBesarVoice error:', err);
+    });
   }, [soundEnabled]);
 
   // Minta Izin & Perbarui Lokasi GPS Interaktif
@@ -281,7 +272,9 @@ export default function PatientPage() {
         showToast('Lokasi GPS berhasil diperbarui!', 'success');
       },
       (err) => {
-        console.warn('GPS error:', err.message, err.code);
+        if (err.code !== 1) {
+          console.warn('GPS error:', err.message, err.code);
+        }
         setGpsData((prev) => ({
           ...prev,
           loading: false,
@@ -328,6 +321,8 @@ export default function PatientPage() {
       return;
     }
 
+    let watchId = null;
+
     // Ambil posisi awal sekali
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -336,13 +331,15 @@ export default function PatientPage() {
         updateRouteOSRM(latitude, longitude, config.latitude, config.longitude);
       },
       (err) => {
-        console.warn('GPS initial error:', err.message);
+        if (err.code !== 1) { // 1 = PERMISSION_DENIED
+          console.warn('GPS initial error:', err.message);
+        }
       },
       { timeout: 8000, enableHighAccuracy: true }
     );
 
     // Watch position secara realtime untuk memperbarui setiap ada pergerakan
-    const watchId = navigator.geolocation.watchPosition(
+    watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
         const prev = lastCoordsRef.current;
@@ -362,13 +359,23 @@ export default function PatientPage() {
         }
       },
       (err) => {
-        console.warn('GPS watchPosition error:', err.message);
+        if (err.code === 1) {
+          // Izin ditolak: langsung clearWatch agar tidak looping error timeout
+          if (watchId !== null) {
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+          }
+        } else {
+          console.warn('GPS watchPosition error:', err.message);
+        }
       },
       { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
 
     return () => {
-      navigator.geolocation.clearWatch(watchId);
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
     };
   }, [config.latitude, config.longitude, updateRouteOSRM]);
 
@@ -388,20 +395,20 @@ export default function PatientPage() {
         if (!antreanErr && antreanData) {
           setAllQueues(antreanData);
 
-          const savedTicket = localStorage.getItem('antrean_pasien');
+          const savedTicket = localStorage.getItem('antrean_pengunjung');
           if (savedTicket) {
             try {
               const parsed = JSON.parse(savedTicket);
               const found = antreanData.find((item) => String(item.id) === String(parsed.id));
               if (found) {
                 setMyQueue(found);
-                localStorage.setItem('antrean_pasien', JSON.stringify(found));
+                localStorage.setItem('antrean_pengunjung', JSON.stringify(found));
               } else {
                 setMyQueue(null);
-                localStorage.removeItem('antrean_pasien');
+                localStorage.removeItem('antrean_pengunjung');
               }
             } catch (e) {
-              console.error('Error parse antrean_pasien:', e);
+              console.error('Error parse saved ticket:', e);
             }
           }
         }
@@ -409,19 +416,22 @@ export default function PatientPage() {
         const { data: cfgData, error: cfgErr } = await supabase
           .from('pengaturan')
           .select('*')
-          .eq('id', 'puskesmas_config')
-          .single();
+          .eq('id', 'pengaturan_organisasi')
+          .maybeSingle();
 
         if (!cfgErr && cfgData) {
           const lat = cfgData.latitude ? parseFloat(cfgData.latitude) : -0.5282;
           const lon = cfgData.longitude ? parseFloat(cfgData.longitude) : 102.5853;
+          const namaOrg = cfgData.nama_organisasi || 'Loket Pelayanan Terpadu';
+          const alamatOrg = cfgData.alamat_organisasi || 'Jl. Pelayanan Publik No. 1';
+          const fotoOrg = cfgData.foto_organisasi_url || '';
 
           setConfig({
-            namaPuskesmas: cfgData.nama_puskesmas || 'Puskesmas Kuala Cenaku',
-            alamatPuskesmas: cfgData.alamat_puskesmas || 'Jl. Kesehatan No. 1, Kuala Cenaku',
-            logoUrl: cfgData.logo_url || '🏥',
-            fotoPuskesmasUrl: cfgData.foto_puskesmas_url || '',
-            infoPenting: cfgData.info_penting || 'Wajib membawa KTP atau Kartu Keluarga (KK) fisik.',
+            namaOrganisasi: namaOrg,
+            alamatOrganisasi: alamatOrg,
+            logoUrl: cfgData.logo_url || '🏢',
+            fotoOrganisasiUrl: fotoOrg,
+            infoPenting: cfgData.info_penting || 'Wajib membawa identitas diri atau nomor tiket saat datang ke loket.',
             statusBuka: cfgData.status_buka ?? true,
             pengumumanDarurat: cfgData.pengumuman_darurat || '',
             latitude: lat,
@@ -438,7 +448,7 @@ export default function PatientPage() {
       }
     } else {
       // Fallback Standalone Local Storage
-      const savedTicket = localStorage.getItem('antrean_pasien');
+      const savedTicket = localStorage.getItem('antrean_pengunjung');
       if (savedTicket) {
         try { setMyQueue(JSON.parse(savedTicket)); } catch { /* ignore */ }
       }
@@ -446,7 +456,7 @@ export default function PatientPage() {
       if (savedAll) {
         try { setAllQueues(JSON.parse(savedAll)); } catch { /* ignore */ }
       }
-      const savedCfg = localStorage.getItem('puskesmas_config');
+      const savedCfg = localStorage.getItem('pengaturan_organisasi');
       if (savedCfg) {
         try { setConfig((prev) => ({ ...prev, ...JSON.parse(savedCfg) })); } catch { /* ignore */ }
       }
@@ -478,7 +488,7 @@ export default function PatientPage() {
                 prev.map((q) => (q.id === payload.new.id ? payload.new : q))
               );
 
-              // Update live status tiket pasien & bunyikan suara / notifikasi PWA
+              // Update live status tiket pengunjung & bunyikan suara / notifikasi PWA
               setMyQueue((current) => {
                 if (current && String(current.id) === String(payload.new.id)) {
                   const isCalling = payload.new.status === 'MEMANGGIL';
@@ -489,12 +499,12 @@ export default function PatientPage() {
                     playCallingVoice(payload.new.nomor, payload.new.nama, payload.new.panggilan_ke || 1);
                     sendSystemNotification(
                       `📢 Panggilan Nomor ${payload.new.nomor}!`,
-                      `Atas nama ${payload.new.nama}, silakan menuju ke loket pemeriksaan sekarang!`
+                      `Atas nama ${payload.new.nama}, silakan menuju ke loket pelayanan sekarang!`
                     );
                     showToast(`Nomor ${payload.new.nomor} sedang dipanggil ke loket!`, 'alert');
                   }
 
-                  localStorage.setItem('antrean_pasien', JSON.stringify(payload.new));
+                  localStorage.setItem('antrean_pengunjung', JSON.stringify(payload.new));
                   return payload.new;
                 }
                 return current;
@@ -504,7 +514,7 @@ export default function PatientPage() {
 
               setMyQueue((current) => {
                 if (current && String(current.id) === String(payload.old.id)) {
-                  localStorage.removeItem('antrean_pasien');
+                  localStorage.removeItem('antrean_pengunjung');
                   showToast('Antrean Anda telah dibatalkan / di-reset.', 'info');
                   return null;
                 }
@@ -516,21 +526,24 @@ export default function PatientPage() {
         .subscribe();
 
       const configChannel = supabase
-        .channel('patient-config-realtime')
+        .channel('pengunjung-config-realtime')
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'pengaturan' },
           (payload) => {
-            if (payload.new && payload.new.id === 'puskesmas_config') {
+            if (payload.new && payload.new.id === 'pengaturan_organisasi') {
               const lat = payload.new.latitude ? parseFloat(payload.new.latitude) : -0.5282;
               const lon = payload.new.longitude ? parseFloat(payload.new.longitude) : 102.5853;
+              const namaOrg = payload.new.nama_organisasi || 'Loket Pelayanan Terpadu';
+              const alamatOrg = payload.new.alamat_organisasi || 'Jl. Pelayanan Publik No. 1';
+              const fotoOrg = payload.new.foto_organisasi_url || '';
 
               setConfig((prev) => ({
                 ...prev,
-                namaPuskesmas: payload.new.nama_puskesmas || prev.namaPuskesmas,
-                alamatPuskesmas: payload.new.alamat_puskesmas || prev.alamatPuskesmas,
+                namaOrganisasi: namaOrg,
+                alamatOrganisasi: alamatOrg,
                 logoUrl: payload.new.logo_url || prev.logoUrl,
-                fotoPuskesmasUrl: payload.new.foto_puskesmas_url || '',
+                fotoOrganisasiUrl: fotoOrg,
                 infoPenting: payload.new.info_penting ?? prev.infoPenting,
                 statusBuka: payload.new.status_buka ?? true,
                 pengumumanDarurat: payload.new.pengumuman_darurat || '',
@@ -600,7 +613,7 @@ export default function PatientPage() {
     return Math.max(2, sisaDepan * 5);
   };
 
-  // Batas Waktu Kedatangan (Estimasi Akhir Kedatangan Pasien di Puskesmas)
+  // Batas Waktu Kedatangan (Estimasi Akhir Kedatangan Pengunjung di Loket)
   const hitungBatasWaktuKedatangan = useCallback(() => {
     if (!myQueue) return '-';
     if (myQueue.status === 'SELESAI') return 'Selesai';
@@ -610,7 +623,7 @@ export default function PatientPage() {
     return targetDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
   }, [myQueue, allQueues]);
 
-  // Efek Notifikasi Peringatan Bersiap (Suara Bip Medis & Notifikasi PWA di HP)
+  // Efek Notifikasi Peringatan Bersiap (Suara Chime Loket & Notifikasi PWA di HP)
   useEffect(() => {
     if (!myQueue) return;
     if (myQueue.status !== 'MENUNGGU' && myQueue.status !== 'TERLAMBAT') return;
@@ -629,7 +642,7 @@ export default function PatientPage() {
         // 2. Notifikasi PWA (Bekerja di HP meskipun web diminimalkan)
         const infoUrutan = sisaDepan === 0 ? 'Giliran Anda berikutnya' : `Sisa ${sisaDepan} antrean lagi`;
         sendSystemNotification(
-          `🏥 Puskesmas Kuala Cenaku: Bersiap Menuju Loket!`,
+          `🏢 ${config.namaOrganisasi || 'Loket Layanan'}: Bersiap Menuju Loket!`,
           `Nomor ${myQueue.nomor} (${myQueue.nama}): ${infoUrutan}. Harap tiba sebelum pukul ${batasWaktu}.`
         );
 
@@ -658,13 +671,13 @@ export default function PatientPage() {
     e.preventDefault();
 
     if (!config.statusBuka) {
-      alert('Pendaftaran antrean sedang ditutup oleh petugas Puskesmas.');
+      showToast('Pendaftaran antrean sedang ditutup oleh petugas loket.', 'alert');
       return;
     }
 
     const namaClean = inputNama.trim();
     if (!namaClean) {
-      alert('Silakan masukkan nama lengkap sesuai KTP / Kartu Keluarga!');
+      showToast('Silakan masukkan nama lengkap sesuai identitas fisik!', 'alert');
       return;
     }
 
@@ -676,36 +689,56 @@ export default function PatientPage() {
         (q) => !q.is_archived && (q.status === 'MENUNGGU' || q.status === 'MEMANGGIL')
       );
       const jumlahDiDepan = antreanAktif.length;
-      const estimasiAwal = Math.max(5, (jumlahDiDepan + 1) * 5);
 
-      const nomorBaru = generateNextQueueNumber(allQueues);
-      const maxUrutan = allQueues.reduce((max, q) => Math.max(max, q.urutan ?? 0), 0);
-
-      const tiketData = {
-        nomor: nomorBaru,
-        nama: namaClean,
-        status: 'MENUNGGU',
-        estimasi_menit: estimasiAwal,
-        urutan: maxUrutan + 1,
-        panggilan_ke: 0,
-        is_archived: false,
-        created_at: new Date().toISOString(),
-      };
+      // Buat idempotency key untuk cegah duplikat dari double-click/retry
+      const idempotencyKey = `pub_${namaClean}_${new Date().toISOString().slice(0, 16)}`;
 
       if (isSupabaseConfigured && supabase) {
-        const { data, error } = await supabase
-          .from('antrean')
-          .insert([tiketData])
-          .select()
-          .single();
+        // Gunakan RPC atomik — nomor antrean ditentukan di server
+        const { data: savedItem, error } = await registerQueueAtomic(
+          namaClean, 'PUBLIC', idempotencyKey, DEFAULT_TENANT_ID
+        );
 
-        if (error) throw error;
+        if (error) throw new Error(error.message || 'Gagal mendaftarkan antrean');
+        if (!savedItem) throw new Error('Tidak ada data tiket dikembalikan');
 
-        const savedItem = data || tiketData;
         setMyQueue(savedItem);
         setTampilkanTiket(true);
-        localStorage.setItem('antrean_pasien', JSON.stringify(savedItem));
+        localStorage.setItem('antrean_pengunjung', JSON.stringify(savedItem));
+        if (savedItem.token_pembatalan) {
+          localStorage.setItem('antrean_tiket_token', savedItem.token_pembatalan);
+        }
+
+        // Catat fitur ML dataset (async, tidak blocking)
+        const now = new Date();
+        const jamDaftar = Number((now.getHours() + now.getMinutes() / 60).toFixed(2));
+        recordMLRegistration({
+          antreanId: savedItem.id,
+          nomor: savedItem.nomor,
+          sumber: 'PUBLIC',
+          antreanDiDepan: jumlahDiDepan,
+          jamDaftar,
+          registeredAt: savedItem.created_at,
+        }).catch(() => {}); // Non-blocking
+
+        showToast(`Nomor Antrean Anda: ${savedItem.nomor}`, 'success');
       } else {
+        // Fallback local: tetap gunakan client-side numbering
+        const estimasiAwal = Math.max(5, (jumlahDiDepan + 1) * 5);
+        const nomorBaru = generateNextQueueNumber(allQueues);
+        const maxUrutan = allQueues.reduce((max, q) => Math.max(max, q.urutan ?? 0), 0);
+
+        const tiketData = {
+          nomor: nomorBaru,
+          nama: namaClean,
+          status: 'MENUNGGU',
+          estimasi_menit: estimasiAwal,
+          urutan: maxUrutan + 1,
+          panggilan_ke: 0,
+          is_archived: false,
+          created_at: new Date().toISOString(),
+        };
+
         const localId = Date.now();
         const savedItem = { ...tiketData, id: localId };
         const updatedList = [...allQueues, savedItem];
@@ -713,7 +746,7 @@ export default function PatientPage() {
         setAllQueues(updatedList);
         setMyQueue(savedItem);
         setTampilkanTiket(true);
-        localStorage.setItem('antrean_pasien', JSON.stringify(savedItem));
+        localStorage.setItem('antrean_pengunjung', JSON.stringify(savedItem));
         localStorage.setItem('antrean_local_db', JSON.stringify(updatedList));
 
         if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -721,37 +754,45 @@ export default function PatientPage() {
           bc.postMessage({ type: 'UPDATE_ALL' });
           bc.close();
         }
+
+        showToast(`Nomor Antrean Anda: ${nomorBaru}`, 'success');
       }
 
-      showToast(`Nomor Antrean Anda: ${nomorBaru}`, 'success');
       setInputNama('');
     } catch (err) {
       console.error('Gagal mengambil antrean:', err);
-      alert('Terjadi kendala saat mendaftarkan antrean. Silakan coba kembali.');
+      showToast('Terjadi kendala saat mendaftarkan antrean: ' + (err.message || 'Silakan coba kembali.'), 'alert');
     } finally {
       setLoading(false);
     }
   };
 
   // -------------------------------------------------------------
-  // 8. Aksi: Batalkan Antrean
+  // 8. Aksi: Batalkan Antrean Secara Aman
   // -------------------------------------------------------------
   const konfirmasiBatalkan = async () => {
     if (!myQueue) return;
 
     setLoading(true);
     const queueId = myQueue.id;
+    const tokenPembatalan = typeof window !== 'undefined'
+      ? (localStorage.getItem('antrean_tiket_token') || '')
+      : '';
 
     try {
       if (isSupabaseConfigured && supabase && queueId) {
-        const { error } = await supabase
-          .from('antrean')
-          .delete()
-          .eq('id', queueId);
+        // Panggil endpoint pembatalan aman yang memverifikasi hash token di server
+        const hasilBatal = await batalkanAntreanAman(queueId, tokenPembatalan);
 
-        if (error) throw error;
+        if (!hasilBatal.sukses) {
+          showToast(hasilBatal.pesan || 'Gagal membatalkan tiket antrean.', 'alert');
+          setLoading(false);
+          return;
+        }
       } else {
-        const updatedList = allQueues.filter((q) => q.id !== queueId);
+        const updatedList = allQueues.map((q) =>
+          q.id === queueId ? { ...q, status: 'DIBATALKAN' } : q
+        );
         setAllQueues(updatedList);
         localStorage.setItem('antrean_local_db', JSON.stringify(updatedList));
 
@@ -763,7 +804,8 @@ export default function PatientPage() {
       }
 
       setMyQueue(null);
-      localStorage.removeItem('antrean_pasien');
+      localStorage.removeItem('antrean_pengunjung');
+      localStorage.removeItem('antrean_tiket_token');
       setShowModal(false);
       lastCallIdRef.current = null;
       setHasSearched(false);
@@ -771,7 +813,7 @@ export default function PatientPage() {
       showToast('Nomor antrean Anda berhasil dibatalkan.', 'info');
     } catch (err) {
       console.error('Gagal membatalkan antrean:', err);
-      alert('Gagal membatalkan antrean. Silakan periksa koneksi Anda.');
+      showToast('Gagal membatalkan antrean. Silakan periksa koneksi Anda.', 'alert');
     } finally {
       setLoading(false);
     }
@@ -802,7 +844,7 @@ export default function PatientPage() {
     requestNotificationPermission();
     setMyQueue(item);
     setTampilkanTiket(true);
-    localStorage.setItem('antrean_pasien', JSON.stringify(item));
+    localStorage.setItem('antrean_pengunjung', JSON.stringify(item));
     setHasSearched(false);
     showToast(`Membuka tiket ${item.nomor} - ${item.nama}`, 'success');
   };
@@ -943,17 +985,17 @@ export default function PatientPage() {
   );
 
   // -------------------------------------------------------------
-  // RENDER INTERFACE PASIEN
+  // RENDER INTERFACE PENGUNJUNG
   // -------------------------------------------------------------
   return (
     <main className="min-h-screen font-sans pb-16 relative bg-gradient-to-b from-slate-50 via-teal-50/20 to-slate-100/70 text-slate-800 selection:bg-teal-100 selection:text-teal-900">
       
-      {/* LATAR BELAKANG FOTO PUSKESMAS (Diputihkan lembut agar nyaman dibaca) */}
-      {config.fotoPuskesmasUrl ? (
+      {/* LATAR BELAKANG FOTO ORGANISASI (Diputihkan lembut agar nyaman dibaca) */}
+      {config.fotoOrganisasiUrl ? (
         <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
           <div 
             className="absolute inset-0 bg-cover bg-center transition-all duration-700 opacity-60 scale-100"
-            style={{ backgroundImage: `url("${config.fotoPuskesmasUrl}")` }}
+            style={{ backgroundImage: `url("${config.fotoOrganisasiUrl}")` }}
           />
           {/* Lapisan overlay lembut putih bersih */}
           <div className="absolute inset-0 bg-white/75 backdrop-blur-[1.5px]" />
@@ -976,20 +1018,27 @@ export default function PatientPage() {
         </div>
       )}
 
-      {/* BANNER PENGUMUMAN DARURAT */}
+      {/* BANNER PENGUMUMAN DARURAT ELEGAN */}
       {config.pengumumanDarurat && (
-        <aside aria-label="Pengumuman Darurat" className="bg-red-600 text-white px-4 py-3 shadow-md sticky top-0 z-40">
-          <div className="max-w-md mx-auto flex items-center gap-3 text-xs sm:text-sm font-bold">
-            <AlertTriangle className="w-5 h-5 shrink-0 text-amber-200" />
-            <div className="flex-1">
-              <span className="uppercase tracking-wider font-extrabold text-amber-200 mr-1.5">PENGUMUMAN:</span>
-              {config.pengumumanDarurat}
+        <aside aria-label="Pengumuman Darurat" className="bg-gradient-to-r from-red-600 via-rose-600 to-red-600 text-white shadow-md sticky top-0 z-40 border-b border-red-500/40">
+          <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-10 py-2.5 sm:py-3 flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-white/20 backdrop-blur-xs flex items-center justify-center shrink-0 border border-white/30 shadow-xs">
+              <Megaphone className="w-4 h-4 text-amber-300 animate-pulse" />
+            </div>
+            <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+              <span className="self-start px-2.5 py-0.5 rounded-full bg-white text-rose-700 font-extrabold text-[10px] sm:text-xs tracking-wider uppercase shrink-0 shadow-xs flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />
+                PENGUMUMAN
+              </span>
+              <p className="text-xs sm:text-sm font-semibold text-white leading-relaxed break-words min-w-0">
+                {config.pengumumanDarurat}
+              </p>
             </div>
           </div>
         </aside>
       )}
 
-      <div className="relative z-10 w-full max-w-[1440px] mx-auto pt-4 sm:pt-6 px-4 sm:px-6 lg:px-8">
+      <div className="relative z-10 w-full pt-4 sm:pt-6 px-4 sm:px-6 lg:px-8 xl:px-10">
         
         {/* ================= LAYOUT UTAMA: RESPONSIVE DESKTOP (2 KOLOM) & MOBILE ================= */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
@@ -997,18 +1046,18 @@ export default function PatientPage() {
           {/* ================= KOLOM KIRI (PROFIL, STATUS, KONTROL FITUR & TENTANG SISTEM) ================= */}
           <div className="lg:col-span-5 xl:col-span-4 space-y-5">
             
-            {/* Header Profil Instansi / Puskesmas (Card Kepala dengan Foto Jelas) */}
+            {/* Header Profil Instansi / Organisasi (Card Kepala dengan Foto Jelas) */}
             <div className={`rounded-3xl p-6 sm:p-7 border shadow-md text-center relative overflow-hidden transition-all hover:shadow-lg ${
-              config.fotoPuskesmasUrl 
+              config.fotoOrganisasiUrl
                 ? 'border-slate-800/20 shadow-slate-900/10' 
                 : 'bg-white/95 backdrop-blur-md border-slate-200/80 shadow-slate-200/50'
             }`}>
               {/* Latar Belakang Foto Pada Card Kepala (JELAS, TANPA LAPISAN PUTIH OPACITY) */}
-              {config.fotoPuskesmasUrl ? (
+              {config.fotoOrganisasiUrl ? (
                 <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
                   <img 
-                    src={config.fotoPuskesmasUrl} 
-                    alt="Foto Gedung Puskesmas" 
+                    src={config.fotoOrganisasiUrl} 
+                    alt="Foto Gedung Pelayanan" 
                     className="w-full h-full object-cover object-center" 
                   />
                   {/* Gradasi gelap lembut di bawah agar foto tetap tampil tajam 100% dan teks putih terbaca sangat kontras */}
@@ -1027,24 +1076,24 @@ export default function PatientPage() {
                     className="w-16 h-16 object-contain rounded-2xl p-1" 
                   />
                 ) : (
-                  <span className="text-4xl">{config.logoUrl || '🏥'}</span>
+                  <span className="text-4xl">{config.logoUrl || '🏢'}</span>
                 )}
               </div>
               
               <h1 className={`relative z-10 text-xl sm:text-2xl font-black tracking-tight leading-snug ${
-                config.fotoPuskesmasUrl ? 'text-white drop-shadow-md' : 'text-slate-900'
+                config.fotoOrganisasiUrl ? 'text-white drop-shadow-md' : 'text-slate-900'
               }`}>
-                {config.namaPuskesmas}
+                {config.namaOrganisasi}
               </h1>
               <p className={`relative z-10 text-xs mt-1 max-w-sm mx-auto leading-relaxed font-medium ${
-                config.fotoPuskesmasUrl ? 'text-slate-200 drop-shadow-xs' : 'text-slate-500'
+                config.fotoOrganisasiUrl ? 'text-slate-200 drop-shadow-xs' : 'text-slate-500'
               }`}>
-                {config.alamatPuskesmas}
+                {config.alamatOrganisasi}
               </p>
 
               {/* Status Loket Badge */}
               <div className={`relative z-10 mt-4 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold border backdrop-blur-md shadow-2xs ${
-                config.fotoPuskesmasUrl 
+                config.fotoOrganisasiUrl
                   ? 'bg-white/95 border-white/60 text-slate-800' 
                   : 'bg-slate-50 border-slate-200/80 text-slate-800'
               }`}>
@@ -1140,7 +1189,7 @@ export default function PatientPage() {
                   <form onSubmit={handleAmbilAntrean} className="space-y-4">
                     <div>
                       <label htmlFor="patient-input" className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                        Nama Lengkap Pasien
+                        Nama Lengkap Pengunjung / Pelanggan
                       </label>
                       <input
                         id="patient-input"
@@ -1389,7 +1438,7 @@ export default function PatientPage() {
                 {myQueue.status === 'SELESAI' && (
                   <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 mb-5 text-center">
                     <p className="text-xs font-bold text-emerald-800">
-                      🎉 Pelayanan Anda telah selesai. Terima kasih telah berkunjung ke {config.namaPuskesmas}.
+                      🎉 Pelayanan Anda telah selesai. Terima kasih telah berkunjung ke {config.namaOrganisasi || 'loket pelayanan'}.
                     </p>
                   </div>
                 )}
@@ -1593,7 +1642,7 @@ export default function PatientPage() {
                     <button
                       onClick={() => {
                         setMyQueue(null);
-                        localStorage.removeItem('antrean_pasien');
+                        localStorage.removeItem('antrean_pengunjung');
                         setTabAktif('ambil');
                       }}
                       className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center gap-2"
@@ -1621,23 +1670,23 @@ export default function PatientPage() {
 
       {/* ================= MODAL TENTANG SISTEM & PANDUAN PENGGUNA ================= */}
       {showAboutModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-lg w-full shadow-2xl border border-slate-100 max-h-[85vh] overflow-y-auto">
             
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
-                  <Sparkles className="w-4 h-4" />
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold border border-teal-100">
+                  <Sparkles className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-slate-900">Tentang Sistem Antrean Cerdas</h3>
-                  <p className="text-[11px] text-slate-400">Teknologi Pelayanan Terpadu & Universal</p>
+                  <p className="text-[11px] text-slate-400">Teknologi Pelayanan Terpadu &amp; Universal</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowAboutModal(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xs font-bold cursor-pointer"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-xs font-bold cursor-pointer transition-colors"
               >
                 ✕
               </button>
@@ -1657,7 +1706,7 @@ export default function PatientPage() {
               <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-100">
                 <h4 className="font-bold text-blue-900 text-xs flex items-center gap-1.5 mb-1">
                   <Navigation className="w-3.5 h-3.5 text-blue-600" />
-                  2. Estimasi Jarak & Rute Perjalanan (OSRM Spasial)
+                  2. Estimasi Jarak &amp; Rute Perjalanan (OSRM Spasial)
                 </h4>
                 <p>
                   Dengan izin lokasi, sistem membaca koordinat GPS perangkat Anda untuk menghitung jarak nyata (KM) dan perkiraan lama perjalanan ke loket, sehingga Anda dapat berangkat tepat waktu tanpa menunggu lama di ruang tunggu.
@@ -1667,7 +1716,7 @@ export default function PatientPage() {
               <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-100">
                 <h4 className="font-bold text-emerald-900 text-xs flex items-center gap-1.5 mb-1">
                   <Volume2 className="w-3.5 h-3.5 text-emerald-600" />
-                  3. Peringatan Suara & Notifikasi PWA
+                  3. Peringatan Suara &amp; Notifikasi PWA
                 </h4>
                 <p>
                   Saat nomor Anda masuk dalam giliran terdekat atau dipanggil ke loket, sistem otomatis membunyikan lonceng medis dan membacakan nama serta nomor antrean Anda. Jika aplikasi dipasang (PWA), notifikasi tetap berbunyi di ponsel meskipun layar terkunci atau aplikasi diminimalkan.
@@ -1677,10 +1726,10 @@ export default function PatientPage() {
               <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-100">
                 <h4 className="font-bold text-amber-900 text-xs flex items-center gap-1.5 mb-1">
                   <ShieldCheck className="w-3.5 h-3.5 text-amber-600" />
-                  4. Bersifat Universal & Menjaga Privasi
+                  4. Bersifat Universal &amp; Menjaga Privasi
                 </h4>
                 <p>
-                  Sistem antrean ini dapat disesuaikan untuk berbagai jenis instansi layanan publik (puskesmas, klinik, kantor pelayanan). Daftar antrean publik hanya menampilkan nomor antrean tanpa mencantumkan identitas rahasia guna menjaga privasi pengunjung.
+                  Sistem antrean ini dapat disesuaikan untuk berbagai jenis instansi layanan publik dan usaha (klinik, kantor pelayanan, salon, bengkel, konsultasi). Daftar antrean publik hanya menampilkan nomor antrean tanpa mencantumkan identitas rahasia guna menjaga privasi pengunjung.
                 </p>
               </div>
             </div>
@@ -1688,7 +1737,7 @@ export default function PatientPage() {
             <button
               type="button"
               onClick={() => setShowAboutModal(false)}
-              className="mt-5 w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer shadow-md"
+              className="mt-5 w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-2xl text-xs transition-all cursor-pointer shadow-md active:scale-98"
             >
               Saya Mengerti
             </button>
@@ -1698,7 +1747,7 @@ export default function PatientPage() {
 
       {/* ================= MODAL PANDUAN AKTIFKAN LOKASI (JIKA PERMISSION DIBLOKIR) ================= */}
       {showLocationDeniedModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl border border-slate-100 text-center">
             <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-amber-200">
               <MapPin className="w-7 h-7" />
@@ -1728,7 +1777,7 @@ export default function PatientPage() {
               <button
                 type="button"
                 onClick={() => setShowLocationDeniedModal(false)}
-                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition-all cursor-pointer"
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer border border-slate-200"
               >
                 Tutup
               </button>
@@ -1738,7 +1787,7 @@ export default function PatientPage() {
                   setShowLocationDeniedModal(false);
                   handleRequestLocation();
                 }}
-                className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+                className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer shadow-md shadow-teal-600/20 active:scale-98"
               >
                 Coba Lagi
               </button>
@@ -1749,7 +1798,7 @@ export default function PatientPage() {
 
       {/* ================= MODAL PANDUAN INSTALL PWA ================= */}
       {showPwaInstallGuideModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl border border-slate-100 text-center">
             <div className="w-14 h-14 bg-teal-50 text-teal-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-teal-200">
               <Smartphone className="w-7 h-7" />
@@ -1778,7 +1827,7 @@ export default function PatientPage() {
             <button
               type="button"
               onClick={() => setShowPwaInstallGuideModal(false)}
-              className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 rounded-xl text-xs transition-all cursor-pointer shadow-xs"
+              className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer shadow-md shadow-teal-600/20 active:scale-98"
             >
               Saya Mengerti
             </button>
@@ -1788,7 +1837,7 @@ export default function PatientPage() {
 
       {/* ================= MODAL KONFIRMASI BATALKAN ANTREAN ================= */}
       {showModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-3xl p-6 sm:p-7 max-w-sm w-full shadow-2xl border border-slate-100 text-center">
             
             <div className="w-16 h-16 bg-rose-50 text-rose-500 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-rose-100">
@@ -1805,7 +1854,7 @@ export default function PatientPage() {
                 type="button"
                 onClick={() => setShowModal(false)}
                 disabled={loading}
-                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-2xl text-xs transition-all cursor-pointer"
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-2xl text-xs transition-all cursor-pointer border border-slate-200"
               >
                 Kembali
               </button>
@@ -1813,7 +1862,7 @@ export default function PatientPage() {
                 type="button"
                 onClick={konfirmasiBatalkan}
                 disabled={loading}
-                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-2xl text-xs shadow-lg shadow-rose-600/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-3.5 rounded-2xl text-xs shadow-lg shadow-rose-600/20 transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-98"
               >
                 {loading ? 'Membatalkan...' : 'Ya, Batalkan'}
               </button>

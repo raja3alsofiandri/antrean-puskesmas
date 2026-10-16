@@ -34,10 +34,22 @@ def add_cors_headers(response):
 
 @app.route('/api/python', methods=['GET'])
 def hello_world():
+    meta = {}
+    meta_path = os.path.join(BASE_DIR, 'model_metadata.json')
+    if os.path.exists(meta_path):
+        try:
+            import json
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+
     return jsonify({
         "status": "online",
-        "pesan": "Backend AI Flask Puskesmas Kuala Cenaku Aktif!",
+        "pesan": "Backend AI Flask Prediksi Antrean Universal Aktif!",
         "model_loaded": model is not None,
+        "model_version": meta.get("versi", "v1.0.0"),
+        "model_mae": meta.get("mae", None),
         "model_path": MODEL_PATH
     })
 
@@ -78,8 +90,25 @@ def predict():
             "pesan": "Anda adalah giliran berikutnya (estimasi ~5 menit)."
         })
 
-    # Coba gunakan Model Random Forest Scikit-Learn
-    if model is not None:
+    # Cek metadata model apakah berstatus RESET atau tidak aktif
+    global model
+    meta_path = os.path.join(BASE_DIR, 'model_metadata.json')
+    model_bisa_dipakai = False
+    if os.path.exists(meta_path) and os.path.exists(MODEL_PATH):
+        try:
+            import json
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            if meta.get('status') != 'RESET_BERSIH' and int(meta.get('total_sampel', 0)) > 0:
+                model_bisa_dipakai = True
+                if model is None:
+                    model = joblib.load(MODEL_PATH)
+        except Exception as reload_err:
+            print(f"[MODEL RELOAD ERROR] {reload_err}")
+            model_bisa_dipakai = False
+
+    # Coba gunakan Model Random Forest Scikit-Learn jika memang aktif dan valid
+    if model_bisa_dipakai and model is not None:
         try:
             # Fitur yang diharapkan: ['antrean_di_depan', 'rata_waktu_pelayanan', 'jam_daftar']
             features_df = pd.DataFrame([{
@@ -102,8 +131,8 @@ def predict():
         except Exception as pred_err:
             print(f"[PREDICTION ERROR] Fallback digunakan karena: {pred_err}")
 
-    # Fallback Heuristik Cerdas (Jika model belum di-load atau error)
-    # Rata-rata 7 menit per orang + 5 menit buffer pelayanan
+    # Fallback Heuristik Cerdas (Jika model belum di-load atau di-reset)
+    # Rata-rata 7 menit per orang + 4 menit buffer pelayanan
     estimasi_fallback = max(5, int(round((antrean_di_depan * rata_waktu) + 4)))
     return jsonify({
         "status": "success",
@@ -111,8 +140,109 @@ def predict():
         "antrean_di_depan": antrean_di_depan,
         "jam_daftar": jam_daftar,
         "metode": "smart_heuristic_fallback",
-        "pesan": f"Estimasi waktu tunggu adaptif: {estimasi_fallback} menit."
+        "pesan": f"Estimasi waktu tunggu standar adaptif: {estimasi_fallback} menit."
     })
+
+@app.route('/api/reset', methods=['POST', 'OPTIONS'])
+def reset_model():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    global model
+    model = None
+    if os.path.exists(MODEL_PATH):
+        try:
+            os.remove(MODEL_PATH)
+        except Exception as e:
+            print(f"[RESET] Gagal hapus model pkl: {e}")
+
+    meta_path = os.path.join(BASE_DIR, 'model_metadata.json')
+    try:
+        import json
+        reset_meta = {
+            "versi": "vDefault_Awal",
+            "fitur": ["antrean_di_depan", "rata_waktu_pelayanan", "jam_daftar"],
+            "total_sampel": 0,
+            "status": "RESET_BERSIH",
+            "keterangan": "Model menggunakan estimasi adaptif bawaan.",
+            "waktu_reset": datetime.now().isoformat()
+        }
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(reset_meta, f, indent=2)
+    except Exception as e:
+        print(f"[RESET] Gagal tulis metadata: {e}")
+
+    return jsonify({
+        "status": "success",
+        "pesan": "Model Random Forest berhasil direset ke standar bawaan Puskesmas (0 sampel).",
+        "model_loaded": False,
+        "total_sampel": 0
+    })
+
+@app.route('/api/retrain', methods=['POST', 'OPTIONS'])
+def retrain():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    global model
+    body = request.get_json(silent=True) or {}
+    items = body.get('data', [])
+    if not items or len(items) < 5:
+        return jsonify({
+            "status": "error",
+            "pesan": "Minimal 5 data riwayat antrean valid diperlukan untuk melatih model."
+        }), 400
+
+    try:
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.metrics import mean_absolute_error
+        import json
+
+        df = pd.DataFrame(items)
+        if 'antrean_di_depan' not in df.columns or 'waktu_tunggu_menit' not in df.columns:
+            return jsonify({"status": "error", "pesan": "Kolom antrean_di_depan dan waktu_tunggu_menit wajib ada."}), 400
+
+        df['antrean_di_depan'] = pd.to_numeric(df['antrean_di_depan'], errors='coerce').fillna(0).astype(int)
+        df['rata_waktu_pelayanan'] = pd.to_numeric(df.get('rata_waktu_pelayanan', 7.0), errors='coerce').fillna(7.0).astype(float)
+        df['jam_daftar'] = pd.to_numeric(df.get('jam_daftar', 9.0), errors='coerce').fillna(9.0).astype(float)
+        df['waktu_tunggu_menit'] = pd.to_numeric(df['waktu_tunggu_menit'], errors='coerce').fillna(7.0).astype(float)
+
+        fitur = ['antrean_di_depan', 'rata_waktu_pelayanan', 'jam_daftar']
+        X = df[fitur]
+        y = df['waktu_tunggu_menit']
+
+        rf = RandomForestRegressor(n_estimators=100, max_depth=6, random_state=42)
+        rf.fit(X, y)
+
+        preds = rf.predict(X)
+        mae = float(round(mean_absolute_error(y, preds), 3))
+
+        # Update cache global
+        model = rf
+        joblib.dump(rf, MODEL_PATH)
+
+        versi = f"v{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        meta = {
+            "versi": versi,
+            "fitur": fitur,
+            "total_sampel": len(df),
+            "mae": mae,
+            "waktu_pelatihan": datetime.now().isoformat(),
+            "status": "AKTIF"
+        }
+        meta_path = os.path.join(BASE_DIR, 'model_metadata.json')
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, indent=2)
+
+        return jsonify({
+            "status": "success",
+            "pesan": f"Model Random Forest berhasil diperbarui dengan {len(df)} data sampel.",
+            "versi": versi,
+            "mae": mae,
+            "total_sampel": len(df)
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "pesan": str(e)}), 500
 
 # Untuk Vercel Serverless Function, objek 'app' diekspor
 if __name__ == '__main__':

@@ -12,13 +12,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "Antrean Cerdas - Puskesmas Kuala Cenaku",
-  description: "Sistem Antrean Digital Real-time Puskesmas Kuala Cenaku",
+  title: "Antrean Cerdas - Sistem Antrean Digital Universal",
+  description: "Sistem Antrean Digital Real-time Multi-Tenant Berbasis AI/ML",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Antrean Puskesmas",
+    title: "Sistem Antrean Universal",
   },
 };
 

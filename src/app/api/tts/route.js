@@ -4,51 +4,80 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Endpoint Text-To-Speech (TTS) Bahasa Indonesia Alami
- * Menggunakan engine Text-to-Speech Google Cloud/Translate TTS id-ID
- * Menghasilkan suara manusia asli Indonesia yang fasih, halus, dan natural.
+ * GET /api/tts?text=...
+ *
+ * Proxy ke Google Translate TTS untuk menghasilkan audio MP3
+ * dengan suara manusia berbahasa Indonesia.
+ *
+ * Mengembalikan stream MP3 binary.
+ * Jika gagal, mengembalikan JSON error 502.
  */
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const text = searchParams.get('text');
 
-  if (!text || !text.trim()) {
-    return NextResponse.json({ error: 'Text parameter is required' }, { status: 400 });
+  if (!text || text.trim().length === 0) {
+    return NextResponse.json(
+      { error: 'Parameter "text" wajib diisi.' },
+      { status: 400 }
+    );
   }
 
-  const cleanText = text.trim().slice(0, 200); // Google TTS limit per segment
+  // Batasi panjang teks agar tidak menyalahgunakan layanan
+  const cleanText = text.trim().slice(0, 500);
 
   try {
-    const encoded = encodeURIComponent(cleanText);
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=id&total=1&idx=0&textlen=${cleanText.length}&client=tw-ob&prev=input`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    const res = await fetch(url, {
+    const googleTtsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=id&q=${encodeURIComponent(cleanText)}`;
+
+    const response = await fetch(googleTtsUrl, {
+      signal: controller.signal,
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Referer: 'https://translate.google.com/',
-        Accept: '*/*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://translate.google.com/',
       },
     });
 
-    if (!res.ok) {
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
       return NextResponse.json(
-        { error: `Upstream TTS error: ${res.status}` },
-        { status: res.status }
+        { error: `Google TTS mengembalikan status ${response.status}` },
+        { status: 502 }
       );
     }
 
-    const arrayBuffer = await res.arrayBuffer();
+    const audioBuffer = await response.arrayBuffer();
 
-    return new NextResponse(arrayBuffer, {
+    if (audioBuffer.byteLength === 0) {
+      return NextResponse.json(
+        { error: 'Audio kosong dari Google TTS' },
+        { status: 502 }
+      );
+    }
+
+    return new NextResponse(audioBuffer, {
       status: 200,
       headers: {
         'Content-Type': 'audio/mpeg',
-        'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+        'Content-Length': String(audioBuffer.byteLength),
+        'Cache-Control': 'public, max-age=3600',
       },
     });
-  } catch (error) {
-    console.error('TTS API error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return NextResponse.json(
+        { error: 'Timeout menghubungi Google TTS (8 detik)' },
+        { status: 504 }
+      );
+    }
+
+    console.error('[/api/tts] Error:', err.message);
+    return NextResponse.json(
+      { error: 'Gagal mengambil audio TTS', detail: err.message },
+      { status: 502 }
+    );
   }
 }
