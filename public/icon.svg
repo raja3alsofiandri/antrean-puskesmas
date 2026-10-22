@@ -1,5 +1,43 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="128" fill="#0d9488"/>
-  <rect x="216" y="116" width="80" height="280" rx="20" fill="#ffffff"/>
-  <rect x="116" y="216" width="280" height="80" rx="20" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Logo aplikasi antrean cerdas">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0BA39B"/>
+      <stop offset="1" stop-color="#0A4D7C"/>
+    </linearGradient>
+    <linearGradient id="accent" gradientUnits="userSpaceOnUse" x1="300" y1="110" x2="440" y2="300">
+      <stop offset="0" stop-color="#FFC933"/>
+      <stop offset="1" stop-color="#FF8A1F"/>
+    </linearGradient>
+    <!-- Lubang di cincin jam tempat kilau berada -->
+    <mask id="ringcut" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#fff"/>
+      <circle cx="424" cy="148" r="40" fill="#000"/>
+    </mask>
+  </defs>
+
+  <!-- Latar ikon aplikasi -->
+  <rect width="512" height="512" rx="116" ry="116" fill="url(#bg)"/>
+
+  <g transform="translate(256 256) scale(0.92) translate(-272 -256)" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- Sigma -->
+    <path d="M172 148 H112 C84 148 76 180 100 198 C124 215 150 228 150 256 C150 284 124 297 100 314 C76 332 84 364 112 364 H180"
+          stroke="#FFFFFF" stroke-width="28"/>
+
+    <!-- Jam -->
+    <circle cx="322" cy="256" r="140" stroke="#FFFFFF" stroke-width="28" mask="url(#ringcut)"/>
+    <g stroke="#FFFFFF" stroke-width="24">
+      <line x1="322" y1="144" x2="322" y2="162"/>
+      <line x1="322" y1="350" x2="322" y2="368"/>
+      <line x1="208" y1="256" x2="226" y2="256"/>
+      <line x1="418" y1="256" x2="436" y2="256"/>
+    </g>
+
+    <!-- Jarum dan panah -->
+    <path d="M322 192 V256 H368" stroke="url(#accent)" stroke-width="26"/>
+    <path d="M366 228 L398 256 L366 284 Z" fill="url(#accent)" stroke="url(#accent)" stroke-width="14"/>
+
+    <!-- Kilau AI -->
+    <path d="M424 112 Q428 144 460 148 Q428 152 424 184 Q420 152 388 148 Q420 144 424 112 Z"
+          fill="url(#accent)" stroke="url(#accent)" stroke-width="6"/>
+  </g>
 </svg>

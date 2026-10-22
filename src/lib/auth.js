@@ -9,7 +9,7 @@ import crypto from 'crypto';
  */
 
 // Kunci rahasia server untuk menandatangani token sesi (HMAC-SHA256)
-const AUTH_SECRET = process.env.AUTH_SECRET ||
+export const AUTH_SECRET = process.env.AUTH_SECRET ||
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   'rahasia-antrean-universal-default-2026';
@@ -221,3 +221,92 @@ export function ambilSesiDariRequest(request) {
     return null;
   }
 }
+
+// =========================================================================
+// SISTEM RATE LIMITING OTP & DETEKSI ANOMALI AKUN PENDING (30 MENIT)
+// =========================================================================
+
+// Pelacak pengiriman OTP: email -> array timestamp [t1, t2] (maksimal 2x per jam)
+const pelacakOtpPerJam = new Map();
+
+/**
+ * Memeriksa apakah pengiriman OTP ke email tertentu masih dalam batas aman (maks 2x per jam)
+ * @param {string} email
+ * @returns {{ diperbolehkan: boolean, sisaMenit: number }}
+ */
+export function periksaRateLimitOtp(email) {
+  if (!email) return { diperbolehkan: false, sisaMenit: 60 };
+  const emailNorm = email.trim().toLowerCase();
+  const sekarang = Date.now();
+  const SATU_JAM_MS = 60 * 60 * 1000;
+
+  let timestamps = pelacakOtpPerJam.get(emailNorm) || [];
+  // Bersihkan catatan yang sudah lebih dari 1 jam
+  timestamps = timestamps.filter(ts => (sekarang - ts) < SATU_JAM_MS);
+
+  if (timestamps.length >= 2) {
+    const waktuKedaluwarsaSlot = timestamps[0] + SATU_JAM_MS;
+    const sisaMenit = Math.max(1, Math.ceil((waktuKedaluwarsaSlot - sekarang) / 60000));
+    return { diperbolehkan: false, sisaMenit };
+  }
+
+  return { diperbolehkan: true, sisaMenit: 0 };
+}
+
+/**
+ * Mencatat pengiriman OTP baru untuk rate limiting
+ * @param {string} email
+ */
+export function catatPengirimanOtp(email) {
+  if (!email) return;
+  const emailNorm = email.trim().toLowerCase();
+  const sekarang = Date.now();
+  const SATU_JAM_MS = 60 * 60 * 1000;
+
+  let timestamps = pelacakOtpPerJam.get(emailNorm) || [];
+  timestamps = timestamps.filter(ts => (sekarang - ts) < SATU_JAM_MS);
+  timestamps.push(sekarang);
+  pelacakOtpPerJam.set(emailNorm, timestamps);
+}
+
+/**
+ * Deteksi Anomali & Auto-Cleanup Akun Pending:
+ * Menghapus akun petugas yang berstatus 'pending' dan tidak mengisi kata sandi dalam waktu 30 menit.
+ * Akun tanpa password dianggap anomali keamanan dan dibersihkan dari Supabase Auth.
+ * @param {object} supabaseAdmin - Client Supabase dengan Service Role Key
+ * @returns {Promise<number>} Jumlah akun yang dibersihkan
+ */
+export async function bersihkanAkunPendingKedaluwarsa(supabaseAdmin) {
+  if (!supabaseAdmin?.auth?.admin) return 0;
+  let jumlahDibersihkan = 0;
+
+  try {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers();
+    if (error || !data?.users) return 0;
+
+    const sekarang = Date.now();
+    const TIGA_PULUH_MENIT_MS = 30 * 60 * 1000; // 30 menit
+
+    for (const user of data.users) {
+      const isPending = user.user_metadata?.status === 'pending';
+      if (!isPending) continue;
+
+      const waktuDibuat = new Date(user.created_at).getTime();
+      const batasPending = user.user_metadata?.pending_until || (waktuDibuat + TIGA_PULUH_MENIT_MS);
+
+      // Jika waktu 30 menit sudah habis dan akun masih belum punya kata sandi resmi (masih pending)
+      if (sekarang > batasPending) {
+        console.warn(`[SECURITY ANOMALY] Menghapus akun ${user.email} (ID: ${user.id}) karena tidak melengkapi kata sandi dalam 30 menit.`);
+        const { error: delErr } = await supabaseAdmin.auth.admin.deleteUser(user.id);
+        if (!delErr) {
+          jumlahDibersihkan++;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[CLEANUP ANOMALY] Gagal memeriksa akun kedaluwarsa:', err.message);
+  }
+
+  return jumlahDibersihkan;
+}
+

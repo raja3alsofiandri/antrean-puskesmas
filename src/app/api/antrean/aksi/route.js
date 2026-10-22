@@ -330,6 +330,11 @@ export async function POST(request) {
         longitude: p.longitude !== '' && p.longitude !== null && !isNaN(Number(p.longitude)) ? Number(p.longitude) : 102.5853,
         display_qr_link: (p.display_qr_link || '').trim(),
         display_sound_enabled: p.display_sound_enabled ?? true,
+        warna_utama: p.warna_utama || '#0d9488',
+        warna_aksen: p.warna_aksen || '#0f766e',
+        warna_latar: p.warna_latar || '#f0fdfa',
+        nama_aplikasi: p.nama_aplikasi || 'Antrean Cerdas',
+        favicon_url: (p.favicon_url || '').trim(),
         updated_at: nowIso,
       };
 

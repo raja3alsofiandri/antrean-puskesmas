@@ -26,7 +26,10 @@ import {
   ShieldCheck,
   Megaphone,
   XCircle,
-  PlusCircle
+  PlusCircle,
+  WifiOff,
+  Wifi,
+  RefreshCw
 } from 'lucide-react';
 import { 
   supabase, 
@@ -52,6 +55,7 @@ import {
   susunKalimatPeringatan, 
   stopAllSpeech 
 } from '@/lib/tts';
+import { injectBrandTheme, applyBrandThemeFromCache, applyFavicon, getCachedConfig } from '@/lib/brandTheme';
 
 export default function HalamanPengunjung() {
   // -------------------------------------------------------------
@@ -81,6 +85,8 @@ export default function HalamanPengunjung() {
   const [allQueues, setAllQueues] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [notificationToast, setNotificationToast] = useState(null);
+  const [isOnline, setIsOnline] = useState(true);
+  const [isRetryingConnection, setIsRetryingConnection] = useState(false);
 
   // -------------------------------------------------------------
   // State OSRM & GPS Realtime
@@ -96,18 +102,7 @@ export default function HalamanPengunjung() {
   // -------------------------------------------------------------
   // State Konfigurasi Organisasi / Layanan (Default Bersih Universal)
   // -------------------------------------------------------------
-  const [config, setConfig] = useState({
-    namaOrganisasi: process.env.NEXT_PUBLIC_ORGANISASI_NAMA || 'Loket Pelayanan Terpadu',
-    alamatOrganisasi: process.env.NEXT_PUBLIC_ORGANISASI_ALAMAT || 'Jl. Pelayanan Publik No. 1, Kota Layanan',
-    logoUrl: '🏢',
-    fotoOrganisasiUrl: '',
-    infoPenting: 'Wajib membawa identitas diri atau bukti registrasi fisik saat datang ke loket. Toleransi keterlambatan maksimal 15 Menit.',
-    statusBuka: true,
-    pengumumanDarurat: '',
-    latitude: -0.5282,
-    longitude: 102.5853,
-    mapsUrl: 'https://maps.google.com/?q=-0.5282,102.5853',
-  });
+  const [config, setConfig] = useState(getCachedConfig);
 
   const lastCallIdRef = useRef(null);
   const toastTimeoutRef = useRef(null);
@@ -119,6 +114,26 @@ export default function HalamanPengunjung() {
     setNotificationToast({ message, type });
     toastTimeoutRef.current = setTimeout(() => setNotificationToast(null), 4000);
   };
+
+  // Interseptor Pengalihan Auth: Jika halaman pengunjung menerima callback atau redirect auth dari Supabase
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+      if (
+        hash.includes('access_token=') ||
+        hash.includes('error=') ||
+        hash.includes('type=recovery') ||
+        hash.includes('type=magiclink') ||
+        hash.includes('type=signup') ||
+        hash.includes('type=invite') ||
+        search.includes('mode=') ||
+        search.includes('code=')
+      ) {
+        window.location.replace(`/admin${search}${hash}`);
+      }
+    }
+  }, []);
 
   // -------------------------------------------------------------
   // 1. Text-To-Speech & Notifikasi Suara Pemanggilan Loket
@@ -168,6 +183,7 @@ export default function HalamanPengunjung() {
   useEffect(() => {
     setIsMounted(true);
     if (typeof window !== 'undefined') {
+      applyBrandThemeFromCache();
       document.documentElement.classList.remove('dark');
       localStorage.removeItem('patient_dark_mode');
       localStorage.removeItem('theme_mode');
@@ -423,13 +439,37 @@ export default function HalamanPengunjung() {
       }
       const savedCfg = localStorage.getItem('pengaturan_organisasi');
       if (savedCfg) {
-        try { setConfig((prev) => ({ ...prev, ...JSON.parse(savedCfg) })); } catch { /* ignore */ }
+        try {
+          const parsed = JSON.parse(savedCfg);
+          setConfig((prev) => ({
+            ...prev,
+            ...parsed,
+            namaOrganisasi: parsed.namaOrganisasi || parsed.nama_organisasi || prev.namaOrganisasi,
+            alamatOrganisasi: parsed.alamatOrganisasi || parsed.alamat_organisasi || prev.alamatOrganisasi,
+            logoUrl: parsed.logoUrl || parsed.logo_url || prev.logoUrl,
+            fotoOrganisasiUrl: parsed.fotoOrganisasiUrl || parsed.foto_organisasi_url || '',
+            infoPenting: parsed.infoPenting || parsed.info_penting || prev.infoPenting,
+            statusBuka: parsed.statusBuka ?? parsed.status_buka ?? prev.statusBuka,
+            pengumumanDarurat: parsed.pengumumanDarurat || parsed.pengumuman_darurat || '',
+            warnaUtama: parsed.warnaUtama || parsed.warna_utama || prev.warnaUtama,
+            faviconUrl: parsed.faviconUrl || parsed.favicon_url || prev.faviconUrl,
+          }));
+          if (parsed.warnaUtama || parsed.warna_utama) {
+            injectBrandTheme(parsed.warnaUtama || parsed.warna_utama);
+          }
+          if (parsed.faviconUrl || parsed.favicon_url) {
+            applyFavicon(parsed.faviconUrl || parsed.favicon_url);
+          }
+        } catch { /* ignore */ }
       }
     };
 
+    // Muat konfigurasi tersimpan dari cache lokal SEKETIKA (tanpa jeda jaringan)
+    loadFromOfflineCache();
+
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     if (isOffline) {
-      loadFromOfflineCache();
+      setIsOnline(false);
       return;
     }
 
@@ -491,7 +531,18 @@ export default function HalamanPengunjung() {
             latitude: lat,
             longitude: lon,
             mapsUrl: cfgData.maps_url || `https://maps.google.com/?q=${lat},${lon}`,
+            warnaUtama: cfgData.warna_utama || '#0d9488',
+            warna_utama: cfgData.warna_utama || '#0d9488',
+            faviconUrl: cfgData.favicon_url || '',
+            favicon_url: cfgData.favicon_url || '',
           };
+
+          if (cfgData.warna_utama) {
+            injectBrandTheme(cfgData.warna_utama);
+          }
+          if (cfgData.favicon_url) {
+            applyFavicon(cfgData.favicon_url);
+          }
 
           setConfig(newCfg);
           try {
@@ -502,8 +553,12 @@ export default function HalamanPengunjung() {
             updateRouteOSRM(lastCoordsRef.current.lat, lastCoordsRef.current.lon, lat, lon);
           }
         }
+        setIsOnline(true);
       } catch (err) {
         console.warn('Jaringan offline / fetch Supabase gagal, beralih ke cache lokal:', err);
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          setIsOnline(false);
+        }
         loadFromOfflineCache();
       }
     } else {
@@ -586,6 +641,13 @@ export default function HalamanPengunjung() {
               const alamatOrg = payload.new.alamat_organisasi || 'Jl. Pelayanan Publik No. 1';
               const fotoOrg = payload.new.foto_organisasi_url || '';
 
+              if (payload.new.warna_utama) {
+                injectBrandTheme(payload.new.warna_utama);
+              }
+              if (payload.new.favicon_url) {
+                applyFavicon(payload.new.favicon_url);
+              }
+
               setConfig((prev) => ({
                 ...prev,
                 namaOrganisasi: namaOrg,
@@ -598,6 +660,10 @@ export default function HalamanPengunjung() {
                 latitude: lat,
                 longitude: lon,
                 mapsUrl: payload.new.maps_url || prev.mapsUrl,
+                warnaUtama: payload.new.warna_utama || prev.warnaUtama,
+                warna_utama: payload.new.warna_utama || prev.warna_utama,
+                faviconUrl: payload.new.favicon_url || prev.faviconUrl,
+                favicon_url: payload.new.favicon_url || prev.favicon_url,
               }));
 
               if (lastCoordsRef.current.lat) {
@@ -630,6 +696,29 @@ export default function HalamanPengunjung() {
     bc.onmessage = (event) => {
       if (event.data?.type === 'UPDATE_ALL' || event.data?.type === 'PANGGIL') {
         fetchAllData();
+      } else if (event.data?.type === 'UPDATE_CONFIG') {
+        const d = event.data?.data;
+        if (d) {
+          if (d.warna_utama) {
+            injectBrandTheme(d.warna_utama);
+          }
+          if (d.favicon_url) {
+            applyFavicon(d.favicon_url);
+          }
+          setConfig((prev) => ({
+            ...prev,
+            namaOrganisasi: d.nama_organisasi || d.namaOrganisasi || prev.namaOrganisasi,
+            alamatOrganisasi: d.alamat_organisasi || d.alamatOrganisasi || prev.alamatOrganisasi,
+            logoUrl: d.logo_url || d.logoUrl || prev.logoUrl,
+            fotoOrganisasiUrl: d.foto_organisasi_url || d.fotoOrganisasiUrl || '',
+            infoPenting: d.info_penting || d.infoPenting || prev.infoPenting,
+            statusBuka: d.status_buka ?? d.statusBuka ?? prev.statusBuka,
+            pengumumanDarurat: d.pengumuman_darurat || d.pengumumanDarurat || '',
+            warnaUtama: d.warna_utama || d.warnaUtama || prev.warnaUtama,
+            faviconUrl: d.favicon_url || d.faviconUrl || prev.faviconUrl,
+          }));
+        }
+        fetchAllData();
       }
     };
     return () => {
@@ -639,11 +728,16 @@ export default function HalamanPengunjung() {
 
   // Listener status koneksi jaringan (Online / Offline)
   useEffect(() => {
+    if (typeof navigator !== 'undefined') {
+      setIsOnline(navigator.onLine);
+    }
     const handleOnline = () => {
+      setIsOnline(true);
       showToast('Koneksi terhubung kembali. Memperbarui data antrean...', 'success');
       fetchAllData();
     };
     const handleOffline = () => {
+      setIsOnline(false);
       showToast('Koneksi terputus. Mode cadangan lokal aktif (data Anda tetap aman).', 'alert');
     };
     window.addEventListener('online', handleOnline);
@@ -653,6 +747,24 @@ export default function HalamanPengunjung() {
       window.removeEventListener('offline', handleOffline);
     };
   }, [fetchAllData]);
+
+  // Tombol aksi Coba Hubungkan Ulang (Retry) saat offline
+  const handleRetryConnection = async () => {
+    setIsRetryingConnection(true);
+    try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        throw new Error('Jaringan offline');
+      }
+      await fetchAllData();
+      setIsOnline(true);
+      showToast('Berhasil terhubung kembali ke server!', 'success');
+    } catch {
+      setIsOnline(false);
+      showToast('Belum dapat terhubung ke internet. Silakan periksa jaringan Anda.', 'alert');
+    } finally {
+      setIsRetryingConnection(false);
+    }
+  };
 
   // -------------------------------------------------------------
   // 6. Kalkulasi Antrean di Depan & Menit Tunggu Realtime
@@ -1086,6 +1198,161 @@ export default function HalamanPengunjung() {
   // -------------------------------------------------------------
   // RENDER INTERFACE PENGUNJUNG
   // -------------------------------------------------------------
+  if (!isMounted) {
+    return (
+      <main className="min-h-screen bg-gradient-to-b from-slate-50 via-teal-50/20 to-slate-100/70 flex items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <div className="w-14 h-14 border-4 border-teal-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-teal-700 font-bold text-lg">
+            Memuat Sistem Antrean…
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  // -------------------------------------------------------------
+  // TAMPILAN OFFLINE KHUSUS PASIEN / PENGUNJUNG (Clean White Elegant Screen)
+  // -------------------------------------------------------------
+  if (!isOnline) {
+    return (
+      <main className="min-h-screen bg-white text-slate-800 flex flex-col justify-between p-4 sm:p-6 lg:p-8 font-sans selection:bg-teal-100 selection:text-teal-900">
+        {/* TOAST NOTIFIKASI MELAYANG */}
+        {notificationToast && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-md animate-fade-in">
+            <div className={`p-4 rounded-2xl shadow-xl flex items-center gap-3 text-sm font-semibold border ${
+              notificationToast.type === 'alert' 
+                ? 'bg-amber-500 text-white border-amber-600' 
+                : notificationToast.type === 'success'
+                ? 'bg-teal-600 text-white border-teal-700'
+                : 'bg-slate-800 text-white border-slate-900'
+            }`}>
+              <Info className="w-5 h-5 shrink-0" />
+              <p className="flex-1">{notificationToast.message}</p>
+            </div>
+          </div>
+        )}
+
+        {/* HEADER / IDENTITAS INSTANSI */}
+        <header className="w-full max-w-xl mx-auto text-center pt-4 sm:pt-8 pb-4">
+          <div className="inline-flex items-center justify-center p-3 rounded-3xl bg-slate-50 border border-slate-200/80 shadow-xs mb-4">
+            {config.logoUrl && (config.logoUrl.startsWith('http') || config.logoUrl.startsWith('data:')) ? (
+              <img
+                src={config.logoUrl}
+                alt="Logo Instansi"
+                className="w-16 h-16 sm:w-20 sm:h-20 object-contain rounded-2xl"
+              />
+            ) : (
+              <span className="text-4xl sm:text-5xl">{config.logoUrl || '🏥'}</span>
+            )}
+          </div>
+          <h1 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight leading-snug px-4">
+            {config.namaOrganisasi || 'Puskesmas / Instansi Pelayanan Publik'}
+          </h1>
+          {config.alamatOrganisasi && (
+            <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1.5 flex items-center justify-center gap-1.5 px-4">
+              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span>{config.alamatOrganisasi}</span>
+            </p>
+          )}
+        </header>
+
+        {/* CARD UTAMA KONEKSI OFFLINE */}
+        <div className="w-full max-w-md mx-auto my-auto py-4">
+          <div className="bg-slate-50/70 border border-slate-200/80 rounded-3xl p-6 sm:p-8 text-center shadow-xs">
+            {/* Visual Icon Badge */}
+            <div className="relative inline-flex items-center justify-center mb-5">
+              <div className="w-20 h-20 rounded-3xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-500 shadow-inner">
+                <WifiOff className="w-10 h-10 animate-pulse" />
+              </div>
+              <span className="absolute -top-1 -right-1 flex h-4 w-4">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-500"></span>
+              </span>
+            </div>
+
+            {/* Offline Badge */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-100/80 text-rose-700 text-xs font-black uppercase tracking-wider mb-3">
+              <span className="w-2 h-2 rounded-full bg-rose-600" />
+              Tidak Ada Koneksi Internet
+            </div>
+
+            <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight mb-2">
+              Koneksi Terputus
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed max-w-sm mx-auto mb-6">
+              Sistem tidak dapat terhubung ke server antrean. Pastikan koneksi Wi-Fi atau data seluler di HP Anda aktif untuk memuat antrean secara realtime.
+            </p>
+
+            {/* JIKA PASIEN MEMILIKI TIKET YANG TERSIMPAN SECARA LOKAL */}
+            {myQueue && (
+              <div className="bg-white border-2 border-teal-500/30 rounded-2xl p-4 sm:p-5 mb-6 text-left shadow-xs">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <Ticket className="w-4 h-4 text-teal-600" />
+                    <span className="text-xs font-black uppercase tracking-wider text-teal-800">Tiket Anda Tetap Aman</span>
+                  </div>
+                  <span className={`text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider ${
+                    myQueue.status === 'MEMANGGIL'
+                      ? 'bg-blue-600 text-white animate-pulse'
+                      : myQueue.status === 'SELESAI'
+                      ? 'bg-slate-200 text-slate-700'
+                      : 'bg-teal-100 text-teal-800'
+                  }`}>
+                    {myQueue.status}
+                  </span>
+                </div>
+                <div className="pt-3 flex items-baseline justify-between">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Nomor Antrean</span>
+                    <p className="text-3xl font-black text-slate-900 tracking-tight">{myQueue.nomor}</p>
+                    <p className="text-xs font-semibold text-slate-600 mt-0.5">{myQueue.nama}</p>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] font-semibold text-slate-400">Tersimpan di HP</span>
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-3 pt-2.5 border-t border-slate-100 leading-snug">
+                  ℹ️ Nomor ini tetap sah. Silakan tetap tunggu di ruang tunggu atau tunjukkan nomor ini ke loket petugas.
+                </p>
+              </div>
+            )}
+
+            {/* TOMBOL COBA HUBUNGKAN ULANG (RETRY) */}
+            <button
+              type="button"
+              onClick={handleRetryConnection}
+              disabled={isRetryingConnection}
+              className="w-full inline-flex items-center justify-center gap-2.5 bg-teal-600 hover:bg-teal-700 active:scale-[0.98] text-white text-sm sm:text-base font-bold py-3.5 px-6 rounded-2xl shadow-lg shadow-teal-600/25 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <RefreshCw className={`w-4 h-4 sm:w-5 sm:h-5 ${isRetryingConnection ? 'animate-spin' : ''}`} />
+              <span>{isRetryingConnection ? 'Memeriksa Koneksi…' : 'Coba Hubungkan Ulang'}</span>
+            </button>
+
+            {/* TIPS BANTUAN */}
+            <div className="mt-6 pt-5 border-t border-slate-200/60 text-left">
+              <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <HelpCircle className="w-3.5 h-3.5 text-slate-400" /> Tips Mengatasi Koneksi:
+              </p>
+              <ul className="text-[11px] sm:text-xs text-slate-500 space-y-1.5 list-disc list-inside">
+                <li>Pastikan Data Seluler atau Wi-Fi telah diaktifkan di HP Anda.</li>
+                <li>Periksa apakah Mode Pesawat (Airplane Mode) sedang aktif.</li>
+                <li>Jika berada di lokasi, Anda dapat menghubungkan ke Wi-Fi loket puskesmas.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        {/* FOOTER */}
+        <footer className="w-full max-w-xl mx-auto text-center pt-4 pb-2">
+          <p className="text-[11px] text-slate-400">
+            Sistem Antrean Digital · Halaman akan otomatis pulih begitu internet terhubung
+          </p>
+        </footer>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen font-sans pb-16 relative bg-gradient-to-b from-slate-50 via-teal-50/20 to-slate-100/70 text-slate-800 selection:bg-teal-100 selection:text-teal-900">
       
@@ -1093,7 +1360,7 @@ export default function HalamanPengunjung() {
       {config.fotoOrganisasiUrl ? (
         <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
           <div 
-            className="absolute inset-0 bg-cover bg-center transition-all duration-700 opacity-60 scale-100"
+            className="absolute -inset-20 bg-cover bg-center opacity-60 animate-bg-load"
             style={{ backgroundImage: `url("${config.fotoOrganisasiUrl}")` }}
           />
           {/* Lapisan overlay lembut putih bersih */}
@@ -1179,12 +1446,12 @@ export default function HalamanPengunjung() {
                 )}
               </div>
               
-              <h1 className={`relative z-10 text-xl sm:text-2xl font-black tracking-tight leading-snug ${
+              <h1 suppressHydrationWarning className={`relative z-10 text-xl sm:text-2xl font-black tracking-tight leading-snug ${
                 config.fotoOrganisasiUrl ? 'text-white drop-shadow-md' : 'text-slate-900'
               }`}>
                 {config.namaOrganisasi}
               </h1>
-              <p className={`relative z-10 text-xs mt-1 max-w-sm mx-auto leading-relaxed font-medium ${
+              <p suppressHydrationWarning className={`relative z-10 text-xs mt-1 max-w-sm mx-auto leading-relaxed font-medium ${
                 config.fotoOrganisasiUrl ? 'text-slate-200 drop-shadow-xs' : 'text-slate-500'
               }`}>
                 {config.alamatOrganisasi}

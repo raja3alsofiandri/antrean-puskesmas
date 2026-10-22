@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { ambilSesiDariRequest } from '@/lib/auth';
+import { ambilSesiDariRequest, bersihkanAkunPendingKedaluwarsa } from '@/lib/auth';
 
 /**
  * GET /api/auth/daftar-akun
@@ -30,15 +30,23 @@ export async function GET(request) {
           auth: { persistSession: false, autoRefreshToken: false },
         });
 
+        // Bersihkan anomali akun pending > 30 menit
+        await bersihkanAkunPendingKedaluwarsa(supabaseAdmin);
+
         const { data, error } = await supabaseAdmin.auth.admin.listUsers();
         if (!error && data?.users) {
-          akunList = data.users.map((u) => ({
-            id: u.id,
-            email: u.email || '',
-            dibuatPada: u.created_at,
-            terakhirMasuk: u.last_sign_in_at,
-            peran: u.user_metadata?.role || u.app_metadata?.role || 'petugas',
-          }));
+          // Hanya tampilkan akun aktif yang sudah menyelesaikan pembuatan password
+          akunList = data.users
+            .filter((u) => u.user_metadata?.status !== 'pending')
+            .map((u) => ({
+              id: u.id,
+              email: u.email || '',
+              nama: u.user_metadata?.nama || u.user_metadata?.username || u.email?.split('@')[0] || 'Petugas',
+              username: u.user_metadata?.nama || u.user_metadata?.username || u.email?.split('@')[0] || 'Petugas',
+              dibuatPada: u.created_at,
+              terakhirMasuk: u.last_sign_in_at,
+              peran: u.user_metadata?.role || u.app_metadata?.role || 'admin',
+            }));
         }
       } catch (errAdmin) {
         console.warn('Gagal membaca auth users via admin:', errAdmin.message);
@@ -59,6 +67,8 @@ export async function GET(request) {
         if (petData && petData.length > 0) {
           akunList = petData.map((p) => ({
             id: String(p.id),
+            nama: p.nama || p.username || 'Petugas',
+            username: p.nama || p.username || 'Petugas',
             email: p.username.includes('@') ? p.username : `${p.username}@organisasi.com`,
             dibuatPada: p.created_at,
             terakhirMasuk: null,
@@ -73,6 +83,8 @@ export async function GET(request) {
       const emailAktif = sesi.email || (sesi.username.includes('@') ? sesi.username : `${sesi.username}@organisasi.com`);
       akunList.push({
         id: sesi.userId || 'active',
+        nama: sesi.username || 'Petugas',
+        username: sesi.username || 'Petugas',
         email: emailAktif,
         dibuatPada: new Date().toISOString(),
         terakhirMasuk: new Date().toISOString(),

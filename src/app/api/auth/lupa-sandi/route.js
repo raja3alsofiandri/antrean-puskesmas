@@ -43,8 +43,8 @@ export async function POST(request) {
     // Dapatkan origin dari request header untuk redirect URL
     const host = request.headers.get('host') || 'localhost:3000';
     const protocol = request.headers.get('x-forwarded-proto') || (host.startsWith('localhost') ? 'http' : 'https');
-    const origin = `${protocol}://${host}`;
-    const redirectUrl = `${origin}/admin?mode=reset_password`;
+    const origin = request.headers.get('origin') || `${protocol}://${host}`;
+    const redirectUrl = `${origin}/admin`;
 
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: redirectUrl,

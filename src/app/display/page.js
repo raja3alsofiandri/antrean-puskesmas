@@ -8,19 +8,11 @@ import {
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
 import { playNotificationChime, unlockAudio } from '@/lib/pwa';
 import { ucapkanSuaraManusia, susunKalimatPanggilan } from '@/lib/tts';
+import { injectBrandTheme, applyBrandThemeFromCache, applyFavicon, getCachedConfig } from '@/lib/brandTheme';
 
 export default function DisplayPage() {
   const [isMounted, setIsMounted] = useState(false);
-  const [config, setConfig] = useState({
-    namaOrganisasi: 'Loket Pelayanan Terpadu',
-    alamatOrganisasi: 'Jl. Pelayanan Publik No. 1, Kota Layanan',
-    logoUrl: '🏢',
-    fotoOrganisasiUrl: '',
-    statusBuka: true,
-    pengumumanDarurat: '',
-    displayQrLink: '',
-    displaySoundEnabled: true,
-  });
+  const [config, setConfig] = useState(getCachedConfig);
   const [sedangDipanggil, setSedangDipanggil] = useState(null);
   const [daftarMenunggu, setDaftarMenunggu] = useState([]);
   const [totalHariIni, setTotalHariIni] = useState(0);
@@ -39,6 +31,7 @@ export default function DisplayPage() {
   // ----- Mount & audio -----
   useEffect(() => {
     setIsMounted(true);
+    applyBrandThemeFromCache();
     unlockAudio();
     document.documentElement.classList.remove('dark');
     if (typeof window !== 'undefined') setPatientOrigin(window.location.origin + '/');
@@ -114,15 +107,23 @@ export default function DisplayPage() {
           const all = JSON.parse(raw).filter(q => !q.is_archived);
           prosesDaftarAntrean(all);
         }
-        const rawCfg = localStorage.getItem('pengaturan_organisasi');
-        if (rawCfg) setConfig(prev => ({ ...prev, ...JSON.parse(rawCfg) }));
+        const cached = getCachedConfig();
+        setConfig(prev => ({ ...prev, ...cached }));
+        if (cached.warnaUtama) {
+          injectBrandTheme(cached.warnaUtama);
+        }
+        if (cached.faviconUrl) {
+          applyFavicon(cached.faviconUrl);
+        }
       } catch { /* ignore */ }
     };
+
+    // Muat seketika dari cache lokal sebelum request jaringan
+    loadFromLocal();
 
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     if (isOffline) {
       setIsOnline(false);
-      loadFromLocal();
       return;
     }
 
@@ -134,6 +135,13 @@ export default function DisplayPage() {
           .eq('id', 'pengaturan_organisasi')
           .maybeSingle();
         if (cfgData) {
+          if (cfgData.warna_utama) {
+            injectBrandTheme(cfgData.warna_utama);
+          }
+          if (cfgData.favicon_url) {
+            applyFavicon(cfgData.favicon_url);
+          }
+
           setConfig(prev => ({
             ...prev,
             namaOrganisasi: cfgData.nama_organisasi || prev.namaOrganisasi,
@@ -144,7 +152,19 @@ export default function DisplayPage() {
             pengumumanDarurat: cfgData.pengumuman_darurat || '',
             displayQrLink: cfgData.display_qr_link || '',
             displaySoundEnabled: cfgData.display_sound_enabled ?? true,
+            warnaUtama: cfgData.warna_utama || prev.warnaUtama,
+            warnaAksen: cfgData.warna_aksen || prev.warnaAksen,
+            warnaLatar: cfgData.warna_latar || prev.warnaLatar,
+            faviconUrl: cfgData.favicon_url || prev.faviconUrl,
           }));
+
+          try {
+            localStorage.setItem('pengaturan_organisasi', JSON.stringify({
+              ...cfgData,
+              warnaUtama: cfgData.warna_utama,
+              faviconUrl: cfgData.favicon_url,
+            }));
+          } catch { /* ignore */ }
         }
         const { data: antreanData, error: antreanErr } = await supabase
           .from('antrean').select('*').eq('is_archived', false)
@@ -181,6 +201,30 @@ export default function DisplayPage() {
       bc.onmessage = (event) => {
         if (event.data?.type === 'UPDATE_ALL' || event.data?.type === 'PANGGIL') {
           loadData();
+        } else if (event.data?.type === 'UPDATE_CONFIG') {
+          const d = event.data?.data;
+          if (d) {
+            if (d.warna_utama || d.warnaUtama) {
+              injectBrandTheme(d.warna_utama || d.warnaUtama);
+            }
+            if (d.favicon_url || d.faviconUrl) {
+              applyFavicon(d.favicon_url || d.faviconUrl);
+            }
+            setConfig(prev => ({
+              ...prev,
+              namaOrganisasi: d.nama_organisasi || d.namaOrganisasi || prev.namaOrganisasi,
+              alamatOrganisasi: d.alamat_organisasi || d.alamatOrganisasi || prev.alamatOrganisasi,
+              logoUrl: d.logo_url || d.logoUrl || prev.logoUrl,
+              fotoOrganisasiUrl: d.foto_organisasi_url ?? d.fotoOrganisasiUrl ?? prev.fotoOrganisasiUrl,
+              statusBuka: d.status_buka ?? d.statusBuka ?? prev.statusBuka,
+              pengumumanDarurat: d.pengumuman_darurat ?? d.pengumumanDarurat ?? prev.pengumumanDarurat,
+              displayQrLink: d.display_qr_link ?? d.displayQrLink ?? prev.displayQrLink,
+              displaySoundEnabled: d.display_sound_enabled ?? d.displaySoundEnabled ?? prev.displaySoundEnabled,
+              warnaUtama: d.warna_utama || d.warnaUtama || prev.warnaUtama,
+              faviconUrl: d.favicon_url || d.faviconUrl || prev.faviconUrl,
+            }));
+          }
+          loadData();
         }
       };
     }
@@ -193,8 +237,21 @@ export default function DisplayPage() {
         .subscribe();
     }
 
+    const handleOnline = () => {
+      setIsOnline(true);
+      loadData();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      loadData();
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     const poll = setInterval(loadData, 5000);
     return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
       if (ch) supabase.removeChannel(ch);
       if (bc) bc.close();
       clearInterval(poll);
@@ -214,8 +271,9 @@ export default function DisplayPage() {
   }
 
   const menunggutampil = daftarMenunggu.slice(0, 10);
+  const qrColor = (config.warnaUtama || '#0d9488').replace('#', '');
   const qrSrc = qrUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrUrl)}&margin=8&color=0f766e&bgcolor=ffffff&format=svg`
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrUrl)}&margin=8&color=${qrColor}&bgcolor=ffffff&format=svg`
     : '';
 
   return (
@@ -225,7 +283,7 @@ export default function DisplayPage() {
       {config.fotoOrganisasiUrl && (
         <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
           <div
-            className="absolute inset-0 bg-cover bg-center transition-all duration-700 opacity-60 scale-100"
+            className="absolute -inset-20 bg-cover bg-center opacity-60 animate-bg-load"
             style={{ backgroundImage: `url("${config.fotoOrganisasiUrl}")` }}
           />
           <div className="absolute inset-0 bg-white/75 backdrop-blur-[1.5px]" />

@@ -7,6 +7,7 @@ import {
   NAMA_COOKIE_SESI,
   DURASI_SESI_DETIK,
   verifikasiPassword,
+  bersihkanAkunPendingKedaluwarsa,
 } from '@/lib/auth';
 
 const DEFAULT_ORGANISASI_ID = '00000000-0000-0000-0000-000000000001';
@@ -69,6 +70,17 @@ export async function POST(request) {
     let userValid = null;
     let authSessionData = null;
 
+    // Bersihkan akun pending anomali (> 30 menit) jika service role key tersedia
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (supabaseUrl && serviceRoleKey) {
+      try {
+        const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        });
+        bersihkanAkunPendingKedaluwarsa(supabaseAdmin).catch(() => {});
+      } catch (_) {}
+    }
+
     // 2. Autentikasi utama menggunakan Supabase Auth (signInWithPassword)
     const emailToAuth = identifier.includes('@') ? identifier : `${identifier}@antrean.local`;
 
@@ -79,10 +91,22 @@ export async function POST(request) {
 
     if (!authError && authData?.user) {
       const user = authData.user;
+
+      // Akun yang masih pending belum memiliki password resmi dan dilarang login
+      if (user.user_metadata?.status === 'pending') {
+        return NextResponse.json(
+          {
+            sukses: false,
+            pesan: 'Akun ini masih dalam status pendaftaran sementara dan belum memiliki kata sandi resmi. Silakan selesaikan proses pendaftaran akun terlebih dahulu.',
+          },
+          { status: 403 }
+        );
+      }
+
       userValid = {
         userId: user.id,
         email: user.email,
-        username: user.email ? user.email.split('@')[0] : identifier,
+        username: user.user_metadata?.nama || user.user_metadata?.username || (user.email ? user.email.split('@')[0] : identifier),
         organisasiId: user.user_metadata?.organisasi_id || user.user_metadata?.tenant_id || DEFAULT_ORGANISASI_ID,
         peran: user.app_metadata?.role || user.user_metadata?.role || 'admin',
       };
