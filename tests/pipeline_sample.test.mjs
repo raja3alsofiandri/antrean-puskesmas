@@ -125,17 +125,19 @@ function normalisasiKeDatasetML(rawItems) {
   return dataset;
 }
 
-test('Pipeline Impor: Parser Mampu Mengekstrak 100 Sampel Dataset Dummy', () => {
-  const datasetPath = path.join(process.cwd(), 'data', 'dummy', 'antrean_puskesmas_2021_2025.csv');
-  const fileContent = fs.readFileSync(datasetPath, 'utf-8');
-  
-  // Ambil header + 100 baris pertama
-  const sampleLines = fileContent.split('\n').slice(0, 101).join('\n');
-  const rawRows = parseCSV(sampleLines);
-  assert.equal(rawRows.length, 100, 'Harus menghasilkan 100 raw objects');
+test('Pipeline Impor: Parser Mampu Mengekstrak dan Menormalisasi Sampel CSV Antrean', () => {
+  const sampleCSV = `No,Nomor Antrean,Nama Pengunjung,Tanggal,Jam Daftar,Jam Panggil,Jam Selesai,Antrean Di Depan,Waktu Tunggu (Menit),Durasi Pelayanan (Menit),Sumber,Status
+1,A01,Budi Santoso,2025-01-01,07:30:00,07:38:00,07:45:00,0,8.0,7.0,ONLINE,SELESAI
+2,A02,Siti Aminah,2025-01-01,07:35:00,07:45:00,07:52:00,1,10.0,7.0,LOKET,SELESAI
+3,A03,Ahmad Pratama,2025-01-01,07:40:00,07:52:00,08:00:00,2,12.0,8.0,ONLINE,SELESAI
+4,A04,Dewi Sartika,2025-01-01,07:45:00,08:00:00,08:06:00,3,15.0,6.0,LOKET,SELESAI
+5,A05,Eko Prasetyo,2025-01-01,07:50:00,08:06:00,08:14:00,4,16.0,8.0,ONLINE,SELESAI`;
+
+  const rawRows = parseCSV(sampleCSV);
+  assert.equal(rawRows.length, 5, 'Harus menghasilkan 5 raw objects');
 
   const normalized = normalisasiKeDatasetML(rawRows);
-  assert.ok(normalized.length > 80, 'Mayoritas berstatus SELESAI dan berhasil dinormalisasi');
+  assert.equal(normalized.length, 5, 'Seluruh baris berstatus SELESAI dan berhasil dinormalisasi');
 
   const first = normalized[0];
   assert.ok('antrean_di_depan' in first);

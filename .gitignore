@@ -42,8 +42,14 @@ next-env.d.ts
 
 # python
 __pycache__/
+**/__pycache__/**
 *.py[cod]
+*.pyc
 *$py.class
 venv/
 .venv/
+
+# scratch & temp
+scratch/
+
 

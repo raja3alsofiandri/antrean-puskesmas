@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Clock, Users, Volume2, VolumeX,
-  Wifi, WifiOff, CheckCircle2, AlertTriangle,
+  Wifi, WifiOff, CheckCircle2,
   Megaphone, ChevronRight,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
@@ -33,6 +33,7 @@ export default function DisplayPage() {
   const [patientOrigin, setPatientOrigin] = useState('');
 
   const lastCalledNomorRef = useRef(null);
+  const lastCallTagRef = useRef('');
   const flashIntervalRef = useRef(null);
 
   // ----- Mount & audio -----
@@ -63,6 +64,68 @@ export default function DisplayPage() {
   // ----- Load data (config + antrean) -----
   const loadData = useCallback(async () => {
     if (!isMounted) return;
+
+    // Helper untuk memproses daftar antrean dan membunyikan panggilan
+    const prosesDaftarAntrean = (antreanData) => {
+      if (!Array.isArray(antreanData)) return;
+      const memanggil = antreanData.find(q => q.status === 'MEMANGGIL') || null;
+      const menunggu = antreanData.filter(q => q.status === 'MENUNGGU' || q.status === 'TERLAMBAT');
+      const selesai = antreanData.filter(q => q.status === 'SELESAI');
+
+      if (memanggil) {
+        const callTag = `${memanggil.nomor}_${memanggil.panggilan_ke || 1}_${memanggil.last_called_at || ''}`;
+        if (callTag !== lastCallTagRef.current) {
+          lastCallTagRef.current = callTag;
+          lastCalledNomorRef.current = memanggil.nomor;
+
+          setConfig(prev => {
+            if (prev.displaySoundEnabled) {
+              playNotificationChime();
+              const kalimat = susunKalimatPanggilan(memanggil.nomor, memanggil.nama, memanggil.panggilan_ke || 1);
+              ucapkanSuaraManusia(kalimat, { delayMs: 550 }).catch(() => {});
+            }
+            return prev;
+          });
+
+          let count = 0;
+          clearInterval(flashIntervalRef.current);
+          setFlashCall(true);
+          flashIntervalRef.current = setInterval(() => {
+            count++;
+            setFlashCall(f => !f);
+            if (count >= 6) {
+              clearInterval(flashIntervalRef.current);
+              setFlashCall(false);
+            }
+          }, 400);
+        }
+      }
+
+      setSedangDipanggil(memanggil);
+      setDaftarMenunggu(menunggu);
+      setTotalHariIni(antreanData.length);
+      setTotalSelesai(selesai.length);
+    };
+
+    const loadFromLocal = () => {
+      try {
+        const raw = localStorage.getItem('antrean_local_db');
+        if (raw) {
+          const all = JSON.parse(raw).filter(q => !q.is_archived);
+          prosesDaftarAntrean(all);
+        }
+        const rawCfg = localStorage.getItem('pengaturan_organisasi');
+        if (rawCfg) setConfig(prev => ({ ...prev, ...JSON.parse(rawCfg) }));
+      } catch { /* ignore */ }
+    };
+
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    if (isOffline) {
+      setIsOnline(false);
+      loadFromLocal();
+      return;
+    }
+
     if (isSupabaseConfigured && supabase) {
       try {
         const { data: cfgData } = await supabase
@@ -83,72 +146,60 @@ export default function DisplayPage() {
             displaySoundEnabled: cfgData.display_sound_enabled ?? true,
           }));
         }
-        const { data: antreanData } = await supabase
+        const { data: antreanData, error: antreanErr } = await supabase
           .from('antrean').select('*').eq('is_archived', false)
           .order('urutan', { ascending: true }).order('created_at', { ascending: true });
+
+        if (antreanErr) throw antreanErr;
+
         if (antreanData) {
-          const memanggil = antreanData.find(q => q.status === 'MEMANGGIL') || null;
-          const menunggu = antreanData.filter(q => q.status === 'MENUNGGU' || q.status === 'TERLAMBAT');
-          const selesai = antreanData.filter(q => q.status === 'SELESAI');
-          if (memanggil && memanggil.nomor !== lastCalledNomorRef.current) {
-            lastCalledNomorRef.current = memanggil.nomor;
-            setConfig(prev => {
-              if (prev.displaySoundEnabled) {
-                playNotificationChime();
-                // Ucapkan nama pengunjung dengan suara manusia (non-blocking)
-                const kalimat = susunKalimatPanggilan(memanggil.nomor, memanggil.nama, memanggil.panggilan_ke || 1);
-                ucapkanSuaraManusia(kalimat, { delayMs: 550 }).catch(() => {});
-              }
-              return prev;
-            });
-            let count = 0;
-            clearInterval(flashIntervalRef.current);
-            setFlashCall(true);
-            flashIntervalRef.current = setInterval(() => {
-              count++;
-              setFlashCall(f => !f);
-              if (count >= 6) { clearInterval(flashIntervalRef.current); setFlashCall(false); }
-            }, 400);
-          }
-          setSedangDipanggil(memanggil);
-          setDaftarMenunggu(menunggu);
-          setTotalHariIni(antreanData.length);
-          setTotalSelesai(selesai.length);
+          prosesDaftarAntrean(antreanData);
+          try {
+            localStorage.setItem('antrean_local_db', JSON.stringify(antreanData));
+          } catch { /* ignore */ }
         }
         setIsOnline(true);
-      } catch { setIsOnline(false); }
+      } catch {
+        setIsOnline(false);
+        loadFromLocal();
+      }
     } else {
-      try {
-        const raw = localStorage.getItem('antrean_local_db');
-        if (raw) {
-          const all = JSON.parse(raw).filter(q => !q.is_archived);
-          const memanggil = all.find(q => q.status === 'MEMANGGIL') || null;
-          setSedangDipanggil(memanggil);
-          setDaftarMenunggu(all.filter(q => q.status === 'MENUNGGU' || q.status === 'TERLAMBAT'));
-          setTotalHariIni(all.length);
-          setTotalSelesai(all.filter(q => q.status === 'SELESAI').length);
-        }
-        const rawCfg = localStorage.getItem('pengaturan_organisasi');
-        if (rawCfg) setConfig(prev => ({ ...prev, ...JSON.parse(rawCfg) }));
-        setIsOnline(true);
-      } catch { setIsOnline(false); }
+      loadFromLocal();
+      setIsOnline(true);
     }
   }, [isMounted]);
 
-  // ----- Realtime & polling -----
+  // ----- Realtime Supabase, BroadcastChannel & Polling -----
   useEffect(() => {
     if (!isMounted) return;
     loadData();
+
+    // BroadcastChannel: Selalu aktif untuk sinkronisasi instan antar-tab/layar offline maupun online
+    let bc = null;
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      bc = new BroadcastChannel('antrean_sync_channel');
+      bc.onmessage = (event) => {
+        if (event.data?.type === 'UPDATE_ALL' || event.data?.type === 'PANGGIL') {
+          loadData();
+        }
+      };
+    }
+
+    let ch = null;
     if (isSupabaseConfigured && supabase) {
-      const ch = supabase.channel('display_rt')
+      ch = supabase.channel('display_rt')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'antrean' }, loadData)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'pengaturan' }, loadData)
         .subscribe();
-      const poll = setInterval(loadData, 10000);
-      return () => { supabase.removeChannel(ch); clearInterval(poll); clearInterval(flashIntervalRef.current); };
     }
+
     const poll = setInterval(loadData, 5000);
-    return () => { clearInterval(poll); clearInterval(flashIntervalRef.current); };
+    return () => {
+      if (ch) supabase.removeChannel(ch);
+      if (bc) bc.close();
+      clearInterval(poll);
+      clearInterval(flashIntervalRef.current);
+    };
   }, [isMounted, loadData]);
 
   if (!isMounted) {
@@ -432,8 +483,8 @@ export default function DisplayPage() {
               {/* Box QR Code */}
               <div className="flex-1 flex items-center justify-center p-4 min-h-0">
                 {qrSrc ? (
-                  // eslint-disable-next-line @next/next/no-img-element
                   <div className="p-2 sm:p-3 bg-white rounded-2xl border-2 border-teal-100 shadow-md">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={qrSrc}
                       alt="QR Code Antrean"

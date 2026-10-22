@@ -24,9 +24,9 @@ import {
   Sparkles,
   MapPin,
   ShieldCheck,
-  ChevronDown,
-  ChevronUp,
-  Megaphone
+  Megaphone,
+  XCircle,
+  PlusCircle
 } from 'lucide-react';
 import { 
   supabase, 
@@ -383,6 +383,56 @@ export default function HalamanPengunjung() {
   // 4. Fetch Awal Data Antrean & Pengaturan dari Supabase
   // -------------------------------------------------------------
   const fetchAllData = useCallback(async () => {
+    // Fungsi pembantu untuk memuat dari cache offline lokal
+    const loadFromOfflineCache = () => {
+      let currentTicket = null;
+      const savedTicket = localStorage.getItem('antrean_pengunjung');
+      if (savedTicket) {
+        try { currentTicket = JSON.parse(savedTicket); } catch { /* ignore */ }
+      }
+      const savedAll = localStorage.getItem('antrean_local_db');
+      if (savedAll) {
+        try {
+          const all = JSON.parse(savedAll);
+          setAllQueues(all);
+          if (currentTicket) {
+            const matched = all.find(
+              (item) => String(item.id) === String(currentTicket.id) || item.nomor === currentTicket.nomor
+            );
+            if (matched) {
+              currentTicket = matched;
+              try { localStorage.setItem('antrean_pengunjung', JSON.stringify(matched)); } catch {}
+            }
+          }
+        } catch { /* ignore */ }
+      }
+      if (currentTicket) {
+        setMyQueue(currentTicket);
+        if (currentTicket.status === 'MEMANGGIL') {
+          const callTag = `${currentTicket.id}_${currentTicket.panggilan_ke || 0}_${currentTicket.last_called_at || ''}`;
+          if (lastCallIdRef.current !== callTag) {
+            lastCallIdRef.current = callTag;
+            playCallingVoice(currentTicket.nomor, currentTicket.nama, currentTicket.panggilan_ke || 1);
+            sendSystemNotification(
+              `📢 Panggilan Nomor ${currentTicket.nomor}!`,
+              `Atas nama ${currentTicket.nama}, silakan menuju ke loket pelayanan sekarang!`
+            );
+            showToast(`Nomor ${currentTicket.nomor} sedang dipanggil ke loket!`, 'alert');
+          }
+        }
+      }
+      const savedCfg = localStorage.getItem('pengaturan_organisasi');
+      if (savedCfg) {
+        try { setConfig((prev) => ({ ...prev, ...JSON.parse(savedCfg) })); } catch { /* ignore */ }
+      }
+    };
+
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    if (isOffline) {
+      loadFromOfflineCache();
+      return;
+    }
+
     if (isSupabaseConfigured && supabase) {
       try {
         const { data: antreanData, error: antreanErr } = await supabase
@@ -392,8 +442,13 @@ export default function HalamanPengunjung() {
           .order('urutan', { ascending: true })
           .order('created_at', { ascending: true });
 
-        if (!antreanErr && antreanData) {
+        if (antreanErr) throw antreanErr;
+
+        if (antreanData) {
           setAllQueues(antreanData);
+          try {
+            localStorage.setItem('antrean_local_db', JSON.stringify(antreanData));
+          } catch { /* ignore */ }
 
           const savedTicket = localStorage.getItem('antrean_pengunjung');
           if (savedTicket) {
@@ -403,9 +458,8 @@ export default function HalamanPengunjung() {
               if (found) {
                 setMyQueue(found);
                 localStorage.setItem('antrean_pengunjung', JSON.stringify(found));
-              } else {
-                setMyQueue(null);
-                localStorage.removeItem('antrean_pengunjung');
+              } else if (parsed && (parsed.status === 'SELESAI' || parsed.status === 'DIBATALKAN')) {
+                setMyQueue(parsed);
               }
             } catch (e) {
               console.error('Error parse saved ticket:', e);
@@ -426,7 +480,7 @@ export default function HalamanPengunjung() {
           const alamatOrg = cfgData.alamat_organisasi || 'Jl. Pelayanan Publik No. 1';
           const fotoOrg = cfgData.foto_organisasi_url || '';
 
-          setConfig({
+          const newCfg = {
             namaOrganisasi: namaOrg,
             alamatOrganisasi: alamatOrg,
             logoUrl: cfgData.logo_url || '🏢',
@@ -437,31 +491,25 @@ export default function HalamanPengunjung() {
             latitude: lat,
             longitude: lon,
             mapsUrl: cfgData.maps_url || `https://maps.google.com/?q=${lat},${lon}`,
-          });
+          };
+
+          setConfig(newCfg);
+          try {
+            localStorage.setItem('pengaturan_organisasi', JSON.stringify(newCfg));
+          } catch { /* ignore */ }
 
           if (lastCoordsRef.current.lat) {
             updateRouteOSRM(lastCoordsRef.current.lat, lastCoordsRef.current.lon, lat, lon);
           }
         }
       } catch (err) {
-        console.error('Error fetching Supabase data:', err);
+        console.warn('Jaringan offline / fetch Supabase gagal, beralih ke cache lokal:', err);
+        loadFromOfflineCache();
       }
     } else {
-      // Fallback Standalone Local Storage
-      const savedTicket = localStorage.getItem('antrean_pengunjung');
-      if (savedTicket) {
-        try { setMyQueue(JSON.parse(savedTicket)); } catch { /* ignore */ }
-      }
-      const savedAll = localStorage.getItem('antrean_local_db');
-      if (savedAll) {
-        try { setAllQueues(JSON.parse(savedAll)); } catch { /* ignore */ }
-      }
-      const savedCfg = localStorage.getItem('pengaturan_organisasi');
-      if (savedCfg) {
-        try { setConfig((prev) => ({ ...prev, ...JSON.parse(savedCfg) })); } catch { /* ignore */ }
-      }
+      loadFromOfflineCache();
     }
-  }, [updateRouteOSRM]);
+  }, [updateRouteOSRM, playCallingVoice]);
 
   // -------------------------------------------------------------
   // 5. Supabase Realtime Subscription (Sync Dua Arah)
@@ -571,25 +619,45 @@ export default function HalamanPengunjung() {
         supabase.removeChannel(antreanChannel);
         supabase.removeChannel(configChannel);
       };
-    } else {
-      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        const bc = new BroadcastChannel('antrean_sync_channel');
-        bc.onmessage = (event) => {
-          if (event.data?.type === 'UPDATE_ALL') fetchAllData();
-        };
-        return () => {
-          clearTimeout(timer);
-          bc.close();
-        };
-      }
-      return () => clearTimeout(timer);
     }
+    return () => clearTimeout(timer);
   }, [fetchAllData, playCallingVoice, updateRouteOSRM]);
+
+  // BroadcastChannel selalu aktif untuk sinkronisasi seketika antar-tab baik online maupun offline
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return;
+    const bc = new BroadcastChannel('antrean_sync_channel');
+    bc.onmessage = (event) => {
+      if (event.data?.type === 'UPDATE_ALL' || event.data?.type === 'PANGGIL') {
+        fetchAllData();
+      }
+    };
+    return () => {
+      bc.close();
+    };
+  }, [fetchAllData]);
+
+  // Listener status koneksi jaringan (Online / Offline)
+  useEffect(() => {
+    const handleOnline = () => {
+      showToast('Koneksi terhubung kembali. Memperbarui data antrean...', 'success');
+      fetchAllData();
+    };
+    const handleOffline = () => {
+      showToast('Koneksi terputus. Mode cadangan lokal aktif (data Anda tetap aman).', 'alert');
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [fetchAllData]);
 
   // -------------------------------------------------------------
   // 6. Kalkulasi Antrean di Depan & Menit Tunggu Realtime
   // -------------------------------------------------------------
-  const hitungAntreanDiDepan = () => {
+  const hitungAntreanDiDepan = useCallback(() => {
     if (!myQueue) return 0;
     const antreanSebelum = allQueues.filter((item) => {
       const isMenunggu = item.status === 'MENUNGGU' || item.status === 'MEMANGGIL';
@@ -598,10 +666,10 @@ export default function HalamanPengunjung() {
       return isMenunggu && isPrioritas;
     });
     return antreanSebelum.length;
-  };
+  }, [myQueue, allQueues]);
 
   // Menit tunggu realtime: berkurang secara dinamis ketika antrean sebelumnya selesai
-  const hitungEstimasiMenitRealtime = () => {
+  const hitungEstimasiMenitRealtime = useCallback(() => {
     if (!myQueue) return 0;
     if (myQueue.status === 'SELESAI') return 0;
     if (myQueue.status === 'MEMANGGIL') return 0;
@@ -611,7 +679,7 @@ export default function HalamanPengunjung() {
 
     // Rata-rata 5 menit per orang yang sedang menunggu di depan
     return Math.max(2, sisaDepan * 5);
-  };
+  }, [myQueue, hitungAntreanDiDepan]);
 
   // Batas Waktu Kedatangan (Estimasi Akhir Kedatangan Pengunjung di Loket)
   const hitungBatasWaktuKedatangan = useCallback(() => {
@@ -621,7 +689,7 @@ export default function HalamanPengunjung() {
     const mnt = hitungEstimasiMenitRealtime();
     const targetDate = new Date(Date.now() + mnt * 60000);
     return targetDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-  }, [myQueue, allQueues]);
+  }, [myQueue, hitungEstimasiMenitRealtime]);
 
   // Efek Notifikasi Peringatan Bersiap (Suara Chime Loket & Notifikasi PWA di HP)
   useEffect(() => {
@@ -650,7 +718,7 @@ export default function HalamanPengunjung() {
         showToast(`⚠️ ${infoUrutan}! Harap tiba sebelum pukul ${batasWaktu}.`, 'alert');
       }
     }
-  }, [allQueues, myQueue, hitungAntreanDiDepan, hitungBatasWaktuKedatangan, playPeringatanLimaBesarVoice]);
+  }, [allQueues, myQueue, hitungAntreanDiDepan, hitungBatasWaktuKedatangan, playPeringatanLimaBesarVoice, config.namaOrganisasi]);
 
   // Daftar antrean yang sedang menunggu (hanya yang belum selesai) terurut
   const antreanMenungguList = allQueues
@@ -684,84 +752,109 @@ export default function HalamanPengunjung() {
     requestNotificationPermission();
     setLoading(true);
 
-    try {
+    // Fungsi pendaftaran offline lokal
+    const buatTiketOffline = () => {
       const antreanAktif = allQueues.filter(
         (q) => !q.is_archived && (q.status === 'MENUNGGU' || q.status === 'MEMANGGIL')
       );
       const jumlahDiDepan = antreanAktif.length;
+      const estimasiAwal = Math.max(5, (jumlahDiDepan + 1) * 5);
+      const nomorBaru = generateNextQueueNumber(allQueues);
+      const maxUrutan = allQueues.reduce((max, q) => Math.max(max, q.urutan ?? 0), 0);
 
-      // Buat idempotency key untuk cegah duplikat dari double-click/retry
-      const idempotencyKey = `pub_${namaClean}_${new Date().toISOString().slice(0, 16)}`;
+      const localId = Date.now();
+      const savedItem = {
+        id: localId,
+        nomor: nomorBaru,
+        nama: namaClean,
+        sumber: 'PUBLIC',
+        status: 'MENUNGGU',
+        estimasi_menit: estimasiAwal,
+        urutan: maxUrutan + 1,
+        panggilan_ke: 0,
+        is_archived: false,
+        created_at: new Date().toISOString(),
+        is_offline_created: true,
+      };
 
-      if (isSupabaseConfigured && supabase) {
-        // Gunakan RPC atomik — nomor antrean ditentukan di server
-        const { data: savedItem, error } = await registerQueueAtomic(
-          namaClean, 'PUBLIC', idempotencyKey, DEFAULT_TENANT_ID
-        );
-
-        if (error) throw new Error(error.message || 'Gagal mendaftarkan antrean');
-        if (!savedItem) throw new Error('Tidak ada data tiket dikembalikan');
-
-        setMyQueue(savedItem);
-        setTampilkanTiket(true);
-        localStorage.setItem('antrean_pengunjung', JSON.stringify(savedItem));
-        if (savedItem.token_pembatalan) {
-          localStorage.setItem('antrean_tiket_token', savedItem.token_pembatalan);
-        }
-
-        // Catat fitur ML dataset (async, tidak blocking)
-        const now = new Date();
-        const jamDaftar = Number((now.getHours() + now.getMinutes() / 60).toFixed(2));
-        recordMLRegistration({
-          antreanId: savedItem.id,
-          nomor: savedItem.nomor,
-          sumber: 'PUBLIC',
-          antreanDiDepan: jumlahDiDepan,
-          jamDaftar,
-          registeredAt: savedItem.created_at,
-        }).catch(() => {}); // Non-blocking
-
-        showToast(`Nomor Antrean Anda: ${savedItem.nomor}`, 'success');
-      } else {
-        // Fallback local: tetap gunakan client-side numbering
-        const estimasiAwal = Math.max(5, (jumlahDiDepan + 1) * 5);
-        const nomorBaru = generateNextQueueNumber(allQueues);
-        const maxUrutan = allQueues.reduce((max, q) => Math.max(max, q.urutan ?? 0), 0);
-
-        const tiketData = {
-          nomor: nomorBaru,
-          nama: namaClean,
-          status: 'MENUNGGU',
-          estimasi_menit: estimasiAwal,
-          urutan: maxUrutan + 1,
-          panggilan_ke: 0,
-          is_archived: false,
-          created_at: new Date().toISOString(),
-        };
-
-        const localId = Date.now();
-        const savedItem = { ...tiketData, id: localId };
-        const updatedList = [...allQueues, savedItem];
-
-        setAllQueues(updatedList);
-        setMyQueue(savedItem);
-        setTampilkanTiket(true);
+      const updatedList = [...allQueues, savedItem];
+      setAllQueues(updatedList);
+      setMyQueue(savedItem);
+      setTampilkanTiket(true);
+      try {
         localStorage.setItem('antrean_pengunjung', JSON.stringify(savedItem));
         localStorage.setItem('antrean_local_db', JSON.stringify(updatedList));
+      } catch { /* ignore */ }
 
-        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
           const bc = new BroadcastChannel('antrean_sync_channel');
           bc.postMessage({ type: 'UPDATE_ALL' });
           bc.close();
-        }
+        } catch { /* ignore */ }
+      }
 
-        showToast(`Nomor Antrean Anda: ${nomorBaru}`, 'success');
+      showToast(`Nomor Antrean Anda: ${nomorBaru} (Mode Offline)`, 'success');
+    };
+
+    try {
+      const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+
+      if (isOnline && isSupabaseConfigured && supabase) {
+        const antreanAktif = allQueues.filter(
+          (q) => !q.is_archived && (q.status === 'MENUNGGU' || q.status === 'MEMANGGIL')
+        );
+        const jumlahDiDepan = antreanAktif.length;
+        const idempotencyKey = `pub_${namaClean}_${new Date().toISOString().slice(0, 16)}`;
+
+        try {
+          // Gunakan RPC atomik — nomor antrean ditentukan di server
+          const { data: savedItem, error } = await registerQueueAtomic(
+            namaClean, 'PUBLIC', idempotencyKey, DEFAULT_TENANT_ID
+          );
+
+          if (error) throw error;
+          if (!savedItem) throw new Error('Tidak ada data tiket dikembalikan');
+
+          setMyQueue(savedItem);
+          setTampilkanTiket(true);
+          try {
+            localStorage.setItem('antrean_pengunjung', JSON.stringify(savedItem));
+            if (savedItem.token_pembatalan) {
+              localStorage.setItem('antrean_tiket_token', savedItem.token_pembatalan);
+            }
+            const updated = [...allQueues.filter(q => q.id !== savedItem.id), savedItem];
+            setAllQueues(updated);
+            localStorage.setItem('antrean_local_db', JSON.stringify(updated));
+          } catch { /* ignore */ }
+
+          // Catat fitur ML dataset (async, tidak blocking)
+          const now = new Date();
+          const jamDaftar = Number((now.getHours() + now.getMinutes() / 60).toFixed(2));
+          recordMLRegistration({
+            antreanId: savedItem.id,
+            nomor: savedItem.nomor,
+            sumber: 'PUBLIC',
+            antreanDiDepan: jumlahDiDepan,
+            jamDaftar,
+            registeredAt: savedItem.created_at,
+          }).catch(() => {});
+
+          showToast(`Nomor Antrean Anda: ${savedItem.nomor}`, 'success');
+        } catch (serverErr) {
+          console.warn('Gagal koneksi server online, beralih ke pendaftaran offline lokal:', serverErr);
+          buatTiketOffline();
+        }
+      } else {
+        // Mode offline lokal
+        buatTiketOffline();
       }
 
       setInputNama('');
     } catch (err) {
-      console.error('Gagal mengambil antrean:', err);
-      showToast('Terjadi kendala saat mendaftarkan antrean: ' + (err.message || 'Silakan coba kembali.'), 'alert');
+      console.warn('Fallback pendaftaran tiket offline:', err);
+      buatTiketOffline();
+      setInputNama('');
     } finally {
       setLoading(false);
     }
@@ -862,23 +955,29 @@ export default function HalamanPengunjung() {
           Alur Layanan Mandiri
         </h3>
       </div>
-      <div className="space-y-2 text-xs">
-        <div className="flex items-start gap-2.5 p-2 rounded-xl bg-slate-50/80 border border-slate-100">
-          <span className="w-5 h-5 rounded-full bg-teal-600 text-white font-black text-[10px] flex items-center justify-center shrink-0">1</span>
-          <p className="text-[11px] text-slate-600 leading-tight">
-            <strong>Ambil Antrean:</strong> Dapatkan nomor tiket digital secara mandiri dan transparan.
+      <div className="space-y-2.5 text-xs">
+        <div className="flex items-center gap-3 p-2.5 sm:p-3 rounded-2xl bg-slate-50/80 border border-slate-100 transition-colors">
+          <div className="w-7 h-7 rounded-xl bg-teal-600 text-white font-black text-xs flex items-center justify-center shrink-0 shadow-2xs">
+            1
+          </div>
+          <p className="text-xs text-slate-600 leading-snug flex-1 min-w-0">
+            <strong className="text-slate-900 font-bold">Ambil Antrean:</strong> Dapatkan nomor tiket digital secara mandiri dan transparan.
           </p>
         </div>
-        <div className="flex items-start gap-2.5 p-2 rounded-xl bg-slate-50/80 border border-slate-100">
-          <span className="w-5 h-5 rounded-full bg-blue-600 text-white font-black text-[10px] flex items-center justify-center shrink-0">2</span>
-          <p className="text-[11px] text-slate-600 leading-tight">
-            <strong>Pantau Real-time:</strong> Lacak estimasi waktu tunggu cerdas & rute perjalanan OSRM.
+        <div className="flex items-center gap-3 p-2.5 sm:p-3 rounded-2xl bg-slate-50/80 border border-slate-100 transition-colors">
+          <div className="w-7 h-7 rounded-xl bg-blue-600 text-white font-black text-xs flex items-center justify-center shrink-0 shadow-2xs">
+            2
+          </div>
+          <p className="text-xs text-slate-600 leading-snug flex-1 min-w-0">
+            <strong className="text-slate-900 font-bold">Pantau Real-time:</strong> Lacak estimasi waktu tunggu cerdas &amp; rute perjalanan OSRM.
           </p>
         </div>
-        <div className="flex items-start gap-2.5 p-2 rounded-xl bg-slate-50/80 border border-slate-100">
-          <span className="w-5 h-5 rounded-full bg-emerald-600 text-white font-black text-[10px] flex items-center justify-center shrink-0">3</span>
-          <p className="text-[11px] text-slate-600 leading-tight">
-            <strong>Panggilan Suara:</strong> Suara notifikasi dan pembacaan nomor otomatis memanggil Anda.
+        <div className="flex items-center gap-3 p-2.5 sm:p-3 rounded-2xl bg-slate-50/80 border border-slate-100 transition-colors">
+          <div className="w-7 h-7 rounded-xl bg-emerald-600 text-white font-black text-xs flex items-center justify-center shrink-0 shadow-2xs">
+            3
+          </div>
+          <p className="text-xs text-slate-600 leading-snug flex-1 min-w-0">
+            <strong className="text-slate-900 font-bold">Panggilan Suara:</strong> Suara notifikasi dan pembacaan nomor otomatis memanggil Anda.
           </p>
         </div>
       </div>
@@ -1395,9 +1494,12 @@ export default function HalamanPengunjung() {
                       ? 'bg-amber-100 text-amber-800 border border-amber-300'
                       : myQueue.status === 'SELESAI'
                       ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      : myQueue.status === 'DIBATALKAN'
+                      ? 'bg-rose-100 text-rose-800 border border-rose-300'
                       : 'bg-teal-100 text-teal-800 border border-teal-300'
                   }`}>
                     {myQueue.status === 'MEMANGGIL' && <Volume2 className="w-3.5 h-3.5 animate-spin" />}
+                    {myQueue.status === 'DIBATALKAN' && <XCircle className="w-3.5 h-3.5" />}
                     {myQueue.status === 'TERLAMBAT' ? 'Dilewati (Terlambat)' : myQueue.status}
                   </span>
                 </div>
@@ -1443,21 +1545,55 @@ export default function HalamanPengunjung() {
                   </div>
                 )}
 
-                {/* Peringatan Wajib Bawa KTP/KK Fisik & Toleransi Keterlambatan */}
-                <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 my-3 flex items-start gap-3 text-left">
-                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                  <div className="text-xs text-amber-900 leading-relaxed">
-                    <span className="font-bold block mb-0.5">Persyaratan Berkas & Waktu:</span>
-                    {config.infoPenting || 'Wajib membawa KTP atau Kartu Keluarga (KK) fisik saat datang ke loket. Toleransi keterlambatan maksimal 15 Menit.'}
+                {/* NOTIFIKASI JIKA STATUS DIBATALKAN */}
+                {myQueue.status === 'DIBATALKAN' && (
+                  <div className="bg-rose-50 border border-rose-200/90 rounded-2xl p-4 sm:p-5 mb-5 text-center space-y-2">
+                    <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mx-auto border border-rose-200 shadow-2xs">
+                      <XCircle className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-rose-900 uppercase tracking-wide">
+                        Antrean Telah Dibatalkan
+                      </h3>
+                      {myQueue.alasan_batal ? (
+                        <p className="text-xs font-semibold text-rose-800 mt-1">
+                          Alasan: {myQueue.alasan_batal}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-rose-700 mt-1">
+                          Dibatalkan oleh Petugas Loket Pendaftaran
+                        </p>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 leading-relaxed max-w-sm mx-auto pt-1">
+                      Nomor antrean ini sudah tidak aktif. Jika Anda masih membutuhkan pelayanan medis, silakan ambil tiket antrean baru atau temui petugas di loket.
+                    </p>
                   </div>
-                </div>
+                )}
+
+                {/* Peringatan Wajib Bawa KTP/KK Fisik & Toleransi Keterlambatan (Hanya jika antrean aktif) */}
+                {myQueue.status !== 'DIBATALKAN' && (
+                  <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 my-3 flex items-start gap-3 text-left">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="text-xs text-amber-900 leading-relaxed">
+                      <span className="font-bold block mb-0.5">Persyaratan Berkas &amp; Waktu:</span>
+                      {config.infoPenting || 'Wajib membawa KTP atau Kartu Keluarga (KK) fisik saat datang ke loket. Toleransi keterlambatan maksimal 15 Menit.'}
+                    </div>
+                  </div>
+                )}
 
                 {/* Nomor Tiket Besar */}
-                <div className="text-center py-4 bg-radial from-teal-50/80 to-transparent rounded-3xl my-2">
+                <div className={`text-center py-4 rounded-3xl my-2 ${
+                  myQueue.status === 'DIBATALKAN'
+                    ? 'bg-slate-100/70 border border-slate-200'
+                    : 'bg-radial from-teal-50/80 to-transparent'
+                }`}>
                   <p className="text-xs font-extrabold text-slate-400 uppercase tracking-widest">
-                    Nomor Antrean
+                    {myQueue.status === 'DIBATALKAN' ? 'Nomor Antrean (Tidak Aktif)' : 'Nomor Antrean'}
                   </p>
-                  <h2 className="text-7xl font-black text-teal-600 tracking-tight my-2">
+                  <h2 className={`text-7xl font-black tracking-tight my-2 ${
+                    myQueue.status === 'DIBATALKAN' ? 'text-slate-400 line-through decoration-rose-500/60' : 'text-teal-600'
+                  }`}>
                     {myQueue.nomor}
                   </h2>
                   <p className="text-sm text-slate-500 font-medium">
@@ -1465,163 +1601,200 @@ export default function HalamanPengunjung() {
                   </p>
                 </div>
 
-                {/* === PERKIRAAN WAKTU PELAYANAN (Modern & Sinkron) === */}
-                <div className="mt-4 bg-gradient-to-br from-white via-teal-50/30 to-slate-50 rounded-3xl border border-teal-200/80 p-5 shadow-sm space-y-3.5 transition-all">
-                  {/* Header perkiraan (Tanpa Real-time AI) */}
-                  <div className="flex items-center justify-between pb-3 border-b border-slate-200/70">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center font-bold">
-                        <Clock className="w-4 h-4" />
+                {/* === PERKIRAAN WAKTU PELAYANAN & RUTE HANYA DITAMPILKAN JIKA ANTREAN MASIH AKTIF === */}
+                {myQueue.status !== 'DIBATALKAN' && (
+                  <>
+                    {/* === PERKIRAAN WAKTU PELAYANAN (Modern & Sinkron) === */}
+                    <div className="mt-4 bg-gradient-to-br from-white via-teal-50/30 to-slate-50 rounded-3xl border border-teal-200/80 p-5 shadow-sm space-y-3.5 transition-all">
+                      {/* Header perkiraan (Tanpa Real-time AI) */}
+                      <div className="flex items-center justify-between pb-3 border-b border-slate-200/70">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center font-bold">
+                            <Clock className="w-4 h-4" />
+                          </div>
+                          <span className="text-xs font-black text-slate-800 uppercase tracking-wider">Perkiraan Waktu Pelayanan</span>
+                        </div>
                       </div>
-                      <span className="text-xs font-black text-slate-800 uppercase tracking-wider">Perkiraan Waktu Pelayanan</span>
-                    </div>
-                  </div>
 
-                  {/* 3 Mini-cards sejajar dengan ukuran teks sinkron */}
-                  <div className="grid grid-cols-3 gap-2.5">
-                    <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs flex flex-col justify-between">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Estimasi Tunggu</p>
-                      <p className="text-lg sm:text-2xl font-black text-teal-600 leading-none">
-                        {hitungEstimasiMenitRealtime()}
-                      </p>
-                      <p className="text-[10px] text-slate-400 mt-1 font-medium">Menit</p>
-                    </div>
+                      {/* 3 Mini-cards sejajar dengan ukuran teks sinkron */}
+                      <div className="grid grid-cols-3 gap-2.5">
+                        <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs flex flex-col justify-between">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Estimasi Tunggu</p>
+                          <p className="text-lg sm:text-2xl font-black text-teal-600 leading-none">
+                            {hitungEstimasiMenitRealtime()}
+                          </p>
+                          <p className="text-[10px] text-slate-400 mt-1 font-medium">Menit</p>
+                        </div>
 
-                    <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs flex flex-col justify-between">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Antrean Depan</p>
-                      <p className="text-lg sm:text-2xl font-black text-blue-600 leading-none">
-                        {hitungAntreanDiDepan()}
-                      </p>
-                      <p className="text-[10px] text-slate-400 mt-1 font-medium">Orang</p>
-                    </div>
+                        <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs flex flex-col justify-between">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Antrean Depan</p>
+                          <p className="text-lg sm:text-2xl font-black text-blue-600 leading-none">
+                            {hitungAntreanDiDepan()}
+                          </p>
+                          <p className="text-[10px] text-slate-400 mt-1 font-medium">Orang</p>
+                        </div>
 
-                    <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs flex flex-col justify-between">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Target Hadir</p>
-                      {myQueue.status === 'MEMANGGIL' ? (
-                        <>
-                          <p className="text-base sm:text-xl font-black text-blue-600 leading-none">Ke Loket</p>
-                          <p className="text-[10px] text-blue-600 font-bold mt-1">Sekarang!</p>
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-base sm:text-xl font-black text-emerald-600 leading-none">{hitungBatasWaktuKedatangan()}</p>
-                          <p className="text-[10px] text-slate-400 mt-1 font-medium">WIB</p>
-                        </>
+                        <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs flex flex-col justify-between">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Target Hadir</p>
+                          {myQueue.status === 'MEMANGGIL' ? (
+                            <>
+                              <p className="text-base sm:text-xl font-black text-blue-600 leading-none">Ke Loket</p>
+                              <p className="text-[10px] text-blue-600 font-bold mt-1">Sekarang!</p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-base sm:text-xl font-black text-emerald-600 leading-none">{hitungBatasWaktuKedatangan()}</p>
+                              <p className="text-[10px] text-slate-400 mt-1 font-medium">WIB</p>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Status badge bawah */}
+                      {myQueue.status !== 'SELESAI' && (
+                        <div className={`mt-3 px-4 py-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 ${
+                          myQueue.status === 'MEMANGGIL'
+                            ? 'bg-blue-50 border-blue-200'
+                            : hitungAntreanDiDepan() < 5
+                            ? 'bg-emerald-50 border-emerald-200'
+                            : 'bg-white border-slate-200/70'
+                        }`}>
+                          {/* Teks utama — tengah di mobile, kiri di desktop */}
+                          <p className={`text-sm font-medium leading-snug text-center sm:text-left ${
+                            myQueue.status === 'MEMANGGIL' ? 'text-blue-900'
+                            : hitungAntreanDiDepan() < 5 ? 'text-emerald-900'
+                            : 'text-slate-700'
+                          }`}>
+                            {myQueue.status === 'MEMANGGIL'
+                              ? 'Nomor Anda sedang dipanggil ke loket'
+                              : <>Hadir sebelum pukul <strong>{hitungBatasWaktuKedatangan()}</strong> WIB</>}
+                          </p>
+                          {/* Badge status — full width tengah di mobile, auto di desktop */}
+                          <span className={`w-full text-center sm:w-auto sm:self-auto shrink-0 text-[11px] font-black px-3 py-1.5 rounded-full whitespace-nowrap ${
+                            myQueue.status === 'MEMANGGIL'
+                              ? 'bg-blue-600 text-white animate-pulse'
+                              : hitungAntreanDiDepan() === 0
+                              ? 'bg-emerald-600 text-white animate-bounce'
+                              : hitungAntreanDiDepan() === 1
+                              ? 'bg-emerald-600 text-white animate-pulse'
+                              : hitungAntreanDiDepan() < 5
+                              ? 'bg-emerald-500 text-white animate-pulse'
+                              : 'bg-slate-200 text-slate-700'
+                          }`}>
+                            {myQueue.status === 'MEMANGGIL'
+                              ? 'Panggilan Aktif'
+                              : hitungAntreanDiDepan() === 0
+                              ? 'Giliran Anda Berikutnya!'
+                              : hitungAntreanDiDepan() === 1
+                              ? 'Sisa 1 Antrean'
+                              : hitungAntreanDiDepan() < 5
+                              ? `Sisa ${hitungAntreanDiDepan()} Antrean`
+                              : `Antrean ke-${hitungAntreanDiDepan() + 1}`}
+                          </span>
+                        </div>
                       )}
                     </div>
-                  </div>
 
-                  {/* Status badge bawah */}
-                  {myQueue.status !== 'SELESAI' && (
-                    <div className={`mt-3 px-4 py-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 ${
-                      myQueue.status === 'MEMANGGIL'
-                        ? 'bg-blue-50 border-blue-200'
-                        : hitungAntreanDiDepan() < 5
-                        ? 'bg-emerald-50 border-emerald-200'
-                        : 'bg-white border-slate-200/70'
-                    }`}>
-                      {/* Teks utama — tengah di mobile, kiri di desktop */}
-                      <p className={`text-sm font-medium leading-snug text-center sm:text-left ${
-                        myQueue.status === 'MEMANGGIL' ? 'text-blue-900'
-                        : hitungAntreanDiDepan() < 5 ? 'text-emerald-900'
-                        : 'text-slate-700'
-                      }`}>
-                        {myQueue.status === 'MEMANGGIL'
-                          ? 'Nomor Anda sedang dipanggil ke loket'
-                          : <>Hadir sebelum pukul <strong>{hitungBatasWaktuKedatangan()}</strong> WIB</>}
-                      </p>
-                      {/* Badge status — full width tengah di mobile, auto di desktop */}
-                      <span className={`w-full text-center sm:w-auto sm:self-auto shrink-0 text-[11px] font-black px-3 py-1.5 rounded-full whitespace-nowrap ${
-                        myQueue.status === 'MEMANGGIL'
-                          ? 'bg-blue-600 text-white animate-pulse'
-                          : hitungAntreanDiDepan() === 0
-                          ? 'bg-emerald-600 text-white animate-bounce'
-                          : hitungAntreanDiDepan() === 1
-                          ? 'bg-emerald-600 text-white animate-pulse'
-                          : hitungAntreanDiDepan() < 5
-                          ? 'bg-emerald-500 text-white animate-pulse'
-                          : 'bg-slate-200 text-slate-700'
-                      }`}>
-                        {myQueue.status === 'MEMANGGIL'
-                          ? 'Panggilan Aktif'
-                          : hitungAntreanDiDepan() === 0
-                          ? 'Giliran Anda Berikutnya!'
-                          : hitungAntreanDiDepan() === 1
-                          ? 'Sisa 1 Antrean'
-                          : hitungAntreanDiDepan() < 5
-                          ? `Sisa ${hitungAntreanDiDepan()} Antrean`
-                          : `Antrean ke-${hitungAntreanDiDepan() + 1}`}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* === RUTE & JARAK KE LOKASI PELAYANAN (Modern & Sinkron) === */}
-                <div className="mt-4 bg-gradient-to-br from-white via-blue-50/30 to-slate-50 rounded-3xl border border-blue-200/80 p-5 shadow-sm space-y-3.5 mb-5 transition-all">
-                  <div className="flex items-center justify-between pb-3 border-b border-slate-200/70">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
-                        <Navigation className="w-4 h-4" />
+                    {/* === RUTE & JARAK KE LOKASI PELAYANAN (Modern & Sinkron) === */}
+                    <div className="mt-4 bg-gradient-to-br from-white via-blue-50/30 to-slate-50 rounded-3xl border border-blue-200/80 p-5 shadow-sm space-y-3.5 mb-5 transition-all">
+                      <div className="flex items-center justify-between pb-3 border-b border-slate-200/70">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                            <Navigation className="w-4 h-4" />
+                          </div>
+                          <span className="text-xs font-black text-slate-800 uppercase tracking-wider">Rute & Jarak ke Lokasi</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (lastCoordsRef.current.lat) {
+                              updateRouteOSRM(lastCoordsRef.current.lat, lastCoordsRef.current.lon, config.latitude, config.longitude);
+                            } else {
+                              handleRequestLocation();
+                            }
+                          }}
+                          disabled={gpsData.loading}
+                          className="w-8 h-8 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 flex items-center justify-center transition-all cursor-pointer shadow-2xs"
+                          title="Perbarui data navigasi GPS"
+                        >
+                          <RotateCcw className={`w-3.5 h-3.5 text-teal-600 ${gpsData.loading ? 'animate-spin' : ''}`} />
+                        </button>
                       </div>
-                      <span className="text-xs font-black text-slate-800 uppercase tracking-wider">Rute & Jarak ke Lokasi</span>
+
+                      {/* 2 Mini-cards sejajar */}
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Jarak Tempuh Lokasi</p>
+                          <p className="text-xl font-black text-slate-900 leading-none mt-0.5">{gpsData.jarakKm}</p>
+                          <p className="text-[10px] text-slate-400 mt-1 font-medium">{gpsData.metode}</p>
+                        </div>
+                        <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Estimasi Perjalanan</p>
+                          <p className="text-xl font-black text-slate-900 leading-none mt-0.5">{gpsData.waktuTempuh}</p>
+                          <p className="text-[10px] text-slate-400 mt-1 font-medium">Berdasarkan Lalu Lintas</p>
+                        </div>
+                      </div>
+
+                      {/* Tombol Statis 50% - 50% (Perbarui Lokasi & Buka Maps) */}
+                      <div className="grid grid-cols-2 gap-3 w-full pt-1">
+                        <button
+                          type="button"
+                          onClick={handleRequestLocation}
+                          disabled={gpsData.loading}
+                          className="w-full inline-flex items-center justify-center gap-2 py-3 px-3 rounded-2xl bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold transition-all cursor-pointer border border-teal-200/80 shadow-2xs disabled:opacity-50"
+                        >
+                          <MapPin className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                          <span className="truncate">{gpsData.loading ? 'Mencari...' : 'Perbarui Lokasi'}</span>
+                        </button>
+
+                        <a
+                          href={config.mapsUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-full inline-flex items-center justify-center gap-2 py-3 px-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all cursor-pointer shadow-2xs shadow-blue-500/20"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">Buka Maps</span>
+                        </a>
+                      </div>
                     </div>
+                  </>
+                )}
+
+                {/* Tombol Aksi Sesuai Status Antrean */}
+                {myQueue.status === 'DIBATALKAN' ? (
+                  <div className="flex flex-col sm:flex-row gap-2.5 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => setTampilkanTiket(false)}
+                      className="flex-1 font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer flex items-center justify-center gap-1.5 border bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200"
+                    >
+                      <ArrowLeft className="w-4 h-4" /> Kembali ke Beranda
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
-                        if (lastCoordsRef.current.lat) {
-                          updateRouteOSRM(lastCoordsRef.current.lat, lastCoordsRef.current.lon, config.latitude, config.longitude);
-                        } else {
-                          handleRequestLocation();
-                        }
+                        setMyQueue(null);
+                        localStorage.removeItem('antrean_pengunjung');
+                        setTabAktif('ambil');
                       }}
-                      disabled={gpsData.loading}
-                      className="w-8 h-8 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 flex items-center justify-center transition-all cursor-pointer shadow-2xs"
-                      title="Perbarui data navigasi GPS"
+                      className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center gap-2"
                     >
-                      <RotateCcw className={`w-3.5 h-3.5 text-teal-600 ${gpsData.loading ? 'animate-spin' : ''}`} />
+                      <PlusCircle className="w-4 h-4" /> Ambil Antrean Baru
                     </button>
                   </div>
-
-                  {/* 2 Mini-cards sejajar */}
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Jarak Tempuh Lokasi</p>
-                      <p className="text-xl font-black text-slate-900 leading-none mt-0.5">{gpsData.jarakKm}</p>
-                      <p className="text-[10px] text-slate-400 mt-1 font-medium">{gpsData.metode}</p>
-                    </div>
-                    <div className="bg-white rounded-2xl p-3 border border-slate-200/80 text-center shadow-2xs">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1">Estimasi Perjalanan</p>
-                      <p className="text-xl font-black text-slate-900 leading-none mt-0.5">{gpsData.waktuTempuh}</p>
-                      <p className="text-[10px] text-slate-400 mt-1 font-medium">Berdasarkan Lalu Lintas</p>
-                    </div>
-                  </div>
-
-                  {/* Tombol Statis 50% - 50% (Perbarui Lokasi & Buka Maps) */}
-                  <div className="grid grid-cols-2 gap-3 w-full pt-1">
-                    <button
-                      type="button"
-                      onClick={handleRequestLocation}
-                      disabled={gpsData.loading}
-                      className="w-full inline-flex items-center justify-center gap-2 py-3 px-3 rounded-2xl bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold transition-all cursor-pointer border border-teal-200/80 shadow-2xs disabled:opacity-50"
-                    >
-                      <MapPin className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                      <span className="truncate">{gpsData.loading ? 'Mencari...' : 'Perbarui Lokasi'}</span>
-                    </button>
-
-                    <a
-                      href={config.mapsUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-full inline-flex items-center justify-center gap-2 py-3 px-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all cursor-pointer shadow-2xs shadow-blue-500/20"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                      <span className="truncate">Buka Maps</span>
-                    </a>
-                  </div>
-                </div>
-
-                {/* Tombol Aksi: Kembali dan Batalkan / Hapus */}
-                {myQueue.status !== 'SELESAI' ? (
+                ) : myQueue.status === 'SELESAI' ? (
+                  <button
+                    onClick={() => {
+                      setMyQueue(null);
+                      localStorage.removeItem('antrean_pengunjung');
+                      setTabAktif('ambil');
+                    }}
+                    className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center gap-2"
+                  >
+                    <PlusCircle className="w-4 h-4" /> Ambil Antrean Baru
+                  </button>
+                ) : (
                   <div className="flex gap-2.5">
                     <button
                       type="button"
@@ -1638,18 +1811,7 @@ export default function HalamanPengunjung() {
                       <Trash2 className="w-4 h-4" /> Batalkan Antrean
                     </button>
                   </div>
-                ) : (
-                    <button
-                      onClick={() => {
-                        setMyQueue(null);
-                        localStorage.removeItem('antrean_pengunjung');
-                        setTabAktif('ambil');
-                      }}
-                      className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-2xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center gap-2"
-                    >
-                      Ambil Antrean Baru
-                    </button>
-                  )}
+                )}
 
               </div>
 

@@ -14,7 +14,6 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Search, 
-  Bell, 
   Upload, 
   MapPin, 
   RefreshCw, 
@@ -27,7 +26,6 @@ import {
   Sparkles,
   RotateCcw,
   ExternalLink,
-  QrCode,
   Monitor,
   AlertTriangle,
   UserPlus,
@@ -76,66 +74,6 @@ export default function AdminPage() {
   // Toggle Suara Admin
   const [soundEnabled, setSoundEnabled] = useState(true);
 
-  // Sinkronisasi Sesi Server & Preferensi Lokal Setelah Komponen Ter-Mount
-  useEffect(() => {
-    setIsMounted(true);
-    if (typeof window !== 'undefined') {
-      document.documentElement.classList.remove('dark');
-      localStorage.removeItem('theme_mode');
-      localStorage.removeItem('antrean_dark_mode');
-      // Bersihkan password plain text dari penyimpanan lokal lama jika pernah tersimpan
-      localStorage.removeItem('admin_password');
-
-      const snd = localStorage.getItem('admin_sound_enabled');
-      if (snd !== null) {
-        setSoundEnabled(snd === 'true');
-      }
-
-      const savedLastImport = localStorage.getItem('antrean_ai_last_import');
-      if (savedLastImport) {
-        try { setRiwayatImporTerakhir(JSON.parse(savedLastImport)); } catch {}
-      }
-
-      // Verifikasi sesi server yang sah melalui endpoint httpOnly cookie
-      fetch('/api/auth/sesi')
-        .then((res) => res.json())
-        .then((resData) => {
-          if (resData.terautentikasi && resData.pengguna) {
-            setIsLoggedIn(true);
-            if (resData.pengguna.username) setAdminUsername(resData.pengguna.username);
-            if (resData.pengguna.email) setAdminEmail(resData.pengguna.email);
-            sessionStorage.setItem('admin_is_logged_in', 'true');
-          } else {
-            setIsLoggedIn(false);
-            sessionStorage.removeItem('admin_is_logged_in');
-          }
-        })
-        .catch(() => {
-          // Fallback offline: periksa sessionStorage hanya jika koneksi gagal
-          const logged = sessionStorage.getItem('admin_is_logged_in') === 'true';
-          if (logged) setIsLoggedIn(true);
-        });
-
-      // Deteksi jika halaman dibuka dari tautan reset password email
-      const hash = window.location.hash || '';
-      const search = window.location.search || '';
-      if (hash.includes('type=recovery') || search.includes('mode=reset_password') || hash.includes('access_token')) {
-        setIsResetPasswordMode(true);
-      }
-    }
-
-    if (isSupabaseConfigured && supabase?.auth) {
-      const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
-        if (event === 'PASSWORD_RECOVERY') {
-          setIsResetPasswordMode(true);
-        }
-      });
-      return () => {
-        authListener?.subscription?.unsubscribe();
-      };
-    }
-  }, []);
-
   // State Ganti Sandi Form (Aman)
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
@@ -161,6 +99,11 @@ export default function AdminPage() {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showPwaInstallGuideModal, setShowPwaInstallGuideModal] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
+
+  // State Jaringan & Sinkronisasi Antrean Offline - Online
+  const [isNetworkOnline, setIsNetworkOnline] = useState(true);
+  const [isSyncingOffline, setIsSyncingOffline] = useState(false);
+  const [pendingOfflineCount, setPendingOfflineCount] = useState(0);
 
   // State Modal Batalkan Antrean
   const [showBatalModal, setShowBatalModal] = useState(false);
@@ -246,10 +189,9 @@ export default function AdminPage() {
   // State untuk menyimpan nilai terakhir yang tersimpan (untuk batalkan)
   const [lastSavedConfig, setLastSavedConfig] = useState(null);
 
-  // State Estimasi Waktu Tunggu Live (AI) & Evaluasi Simulasi Historis
+  // State Estimasi Waktu Tunggu Live (AI)
   const [liveAiEstimate, setLiveAiEstimate] = useState(null);
   const [isLoadingAiEstimate, setIsLoadingAiEstimate] = useState(false);
-  const [evaluasiSimulasi, setEvaluasiSimulasi] = useState(null);
   const [statusAiModel, setStatusAiModel] = useState({
     model_aktif: false,
     total_dataset: 0,
@@ -260,7 +202,6 @@ export default function AdminPage() {
   // State Pengelolaan Data Pelatihan AI & Riwayat Impor
   const [showModalResetAI, setShowModalResetAI] = useState(false);
   const [isResettingAI, setIsResettingAI] = useState(false);
-  const [showDetailSimulasiModal, setShowDetailSimulasiModal] = useState(false);
   const [riwayatImporTerakhir, setRiwayatImporTerakhir] = useState(null);
 
   const toastTimeoutRef = useRef(null);
@@ -270,6 +211,66 @@ export default function AdminPage() {
     setToastMessage({ message, type });
     toastTimeoutRef.current = setTimeout(() => setToastMessage(null), 3500);
   };
+
+  // Sinkronisasi Sesi Server & Preferensi Lokal Setelah Komponen Ter-Mount
+  useEffect(() => {
+    setIsMounted(true);
+    if (typeof window !== 'undefined') {
+      document.documentElement.classList.remove('dark');
+      localStorage.removeItem('theme_mode');
+      localStorage.removeItem('antrean_dark_mode');
+      // Bersihkan password plain text dari penyimpanan lokal lama jika pernah tersimpan
+      localStorage.removeItem('admin_password');
+
+      const snd = localStorage.getItem('admin_sound_enabled');
+      if (snd !== null) {
+        setSoundEnabled(snd === 'true');
+      }
+
+      const savedLastImport = localStorage.getItem('antrean_ai_last_import');
+      if (savedLastImport) {
+        try { setRiwayatImporTerakhir(JSON.parse(savedLastImport)); } catch {}
+      }
+
+      // Verifikasi sesi server yang sah melalui endpoint httpOnly cookie
+      fetch('/api/auth/sesi')
+        .then((res) => res.json())
+        .then((resData) => {
+          if (resData.terautentikasi && resData.pengguna) {
+            setIsLoggedIn(true);
+            if (resData.pengguna.username) setAdminUsername(resData.pengguna.username);
+            if (resData.pengguna.email) setAdminEmail(resData.pengguna.email);
+            sessionStorage.setItem('admin_is_logged_in', 'true');
+          } else {
+            setIsLoggedIn(false);
+            sessionStorage.removeItem('admin_is_logged_in');
+          }
+        })
+        .catch(() => {
+          // Fallback offline: periksa sessionStorage hanya jika koneksi gagal
+          const logged = sessionStorage.getItem('admin_is_logged_in') === 'true';
+          if (logged) setIsLoggedIn(true);
+        });
+
+      // Deteksi jika halaman dibuka dari tautan reset password email
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+      if (hash.includes('type=recovery') || search.includes('mode=reset_password') || hash.includes('access_token')) {
+        setIsResetPasswordMode(true);
+      }
+    }
+
+    if (isSupabaseConfigured && supabase?.auth) {
+      const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          setIsResetPasswordMode(true);
+        }
+      });
+      return () => {
+        authListener?.subscription?.unsubscribe();
+      };
+    }
+  }, []);
 
   // Jam Digital Realtime
   useEffect(() => {
@@ -383,40 +384,169 @@ export default function AdminPage() {
     });
   }, [soundEnabled]);
 
+  // Pantau jumlah antrean lokal yang belum disinkronkan ke server
+  useEffect(() => {
+    const unsynced = daftarAntrean.filter(
+      (q) => q.is_offline_created === true || q.is_offline_updated === true
+    );
+    setPendingOfflineCount(unsynced.length);
+  }, [daftarAntrean]);
+
   // -------------------------------------------------------------
-  // 2. Fetch Data Antrean & Pengaturan dari Supabase
+  // 2A. Sinkronisasi Antrean Offline ke Cloud Database (Dua Arah)
+  // -------------------------------------------------------------
+  const sinkronisasiDataOffline = useCallback(async (currentQueue = null) => {
+    if (typeof window === 'undefined') return false;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
+
+    let localList = currentQueue;
+    if (!localList) {
+      try {
+        const raw = localStorage.getItem('antrean_local_db');
+        if (raw) localList = JSON.parse(raw);
+      } catch {}
+    }
+    if (!Array.isArray(localList) || localList.length === 0) return false;
+
+    const offlineCreated = localList.filter((q) => q.is_offline_created === true);
+    const offlineUpdated = localList.filter(
+      (q) => q.is_offline_updated === true && !q.is_offline_created
+    );
+
+    if (offlineCreated.length === 0 && offlineUpdated.length === 0) {
+      setPendingOfflineCount(0);
+      return false;
+    }
+
+    setIsSyncingOffline(true);
+    try {
+      const res = await fetch('/api/antrean/aksi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aksi: 'SINKRONISASI_OFFLINE',
+          data: {
+            offline_antrean: offlineCreated,
+            offline_updates: offlineUpdated,
+          },
+        }),
+      });
+
+      const resData = await res.json().catch(() => ({}));
+      if (res.ok && resData.sukses && Array.isArray(resData.daftar_terbaru)) {
+        const serverList = resData.daftar_terbaru;
+        setDaftarAntrean(serverList);
+        try {
+          localStorage.setItem('antrean_local_db', JSON.stringify(serverList));
+        } catch {}
+        setPendingOfflineCount(0);
+        showToast(
+          `✅ ${resData.pesan || 'Data antrean offline berhasil disinkronkan ke cloud!'}`,
+          'success'
+        );
+
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          try {
+            const bc = new BroadcastChannel('antrean_sync_channel');
+            bc.postMessage({ type: 'UPDATE_ALL' });
+            bc.close();
+          } catch {}
+        }
+        return true;
+      }
+    } catch (err) {
+      console.warn('Gagal sinkronisasi data offline:', err);
+    } finally {
+      setIsSyncingOffline(false);
+    }
+    return false;
+  }, []);
+
+  // -------------------------------------------------------------
+  // 2B. Fetch Data Antrean dari Supabase (Dengan Fallback & Penjaga Offline)
   // -------------------------------------------------------------
   const loadAntreanData = useCallback(async () => {
+    const loadFromOfflineCache = () => {
+      const savedQueue = localStorage.getItem('antrean_local_db');
+      if (savedQueue) {
+        try {
+          const parsed = JSON.parse(savedQueue);
+          setDaftarAntrean(parsed);
+          const unsynced = parsed.filter(
+            (q) => q.is_offline_created === true || q.is_offline_updated === true
+          );
+          setPendingOfflineCount(unsynced.length);
+        } catch { /* ignore */ }
+      }
+    };
+
     if (isSupabaseConfigured && supabase) {
       try {
+        // Cek terlebih dahulu apakah ada data antrean offline yang menunggu sinkronisasi
+        const savedQueue = localStorage.getItem('antrean_local_db');
+        if (savedQueue) {
+          try {
+            const parsed = JSON.parse(savedQueue);
+            const hasOffline = parsed.some(
+              (q) => q.is_offline_created === true || q.is_offline_updated === true
+            );
+            if (hasOffline && typeof navigator !== 'undefined' && navigator.onLine) {
+              const synced = await sinkronisasiDataOffline(parsed);
+              if (synced) return;
+            }
+          } catch {}
+        }
+
         const { data: antreanData, error: antreanErr } = await supabase
           .from('antrean')
           .select('*')
           .order('urutan', { ascending: true })
           .order('created_at', { ascending: true });
 
-        if (!antreanErr && antreanData) {
+        if (antreanErr) throw antreanErr;
+
+        if (antreanData) {
           setDaftarAntrean(antreanData);
+          try {
+            localStorage.setItem('antrean_local_db', JSON.stringify(antreanData));
+          } catch { /* ignore */ }
+          setPendingOfflineCount(0);
         }
       } catch (err) {
-        console.error('Error load antrean:', err);
+        console.warn('Jaringan offline / fetch Supabase admin gagal, membaca dari cache lokal:', err);
+        loadFromOfflineCache();
       }
     } else {
-      const savedQueue = localStorage.getItem('antrean_local_db');
-      if (savedQueue) {
-        try { setDaftarAntrean(JSON.parse(savedQueue)); } catch { /* ignore */ }
-      }
+      loadFromOfflineCache();
     }
-  }, []);
+  }, [sinkronisasiDataOffline]);
 
   const loadConfigData = useCallback(async () => {
+    const loadConfigFromOfflineCache = () => {
+      const savedCfg = localStorage.getItem('pengaturan_organisasi');
+      if (savedCfg) {
+        try {
+          const parsed = JSON.parse(savedCfg);
+          if (parsed.namaOrganisasi) setNamaOrganisasi(parsed.namaOrganisasi);
+          if (parsed.alamatOrganisasi) setAlamatOrganisasi(parsed.alamatOrganisasi);
+          if (parsed.logoUrl) setLogoUrl(parsed.logoUrl);
+          if (parsed.fotoOrganisasiUrl) setFotoOrganisasiUrl(parsed.fotoOrganisasiUrl);
+          if (parsed.statusBuka !== undefined) setStatusBuka(parsed.statusBuka);
+          if (parsed.pengumumanDarurat !== undefined) setPengumumanDarurat(parsed.pengumumanDarurat);
+          setLastSavedConfig(parsed);
+        } catch { /* ignore */ }
+      }
+    };
+
     if (isSupabaseConfigured && supabase) {
       try {
-        const { data: cfgData } = await supabase
+        const { data: cfgData, error: cfgErr } = await supabase
           .from('pengaturan')
           .select('*')
           .eq('id', 'pengaturan_organisasi')
           .maybeSingle();
+
+        if (cfgErr) throw cfgErr;
 
         if (cfgData) {
           const namaOrg = cfgData.nama_organisasi || 'Loket Pelayanan Terpadu';
@@ -453,24 +583,16 @@ export default function AdminPage() {
 
           // Simpan snapshot config tersimpan untuk fungsi batalkan
           setLastSavedConfig(cfg);
+          try {
+            localStorage.setItem('pengaturan_organisasi', JSON.stringify(cfg));
+          } catch { /* ignore */ }
         }
       } catch (err) {
-        console.error('Error load config data:', err);
+        console.warn('Error load config data, memulihkan dari cache lokal:', err);
+        loadConfigFromOfflineCache();
       }
     } else {
-      const savedCfg = localStorage.getItem('pengaturan_organisasi');
-      if (savedCfg) {
-        try {
-          const parsed = JSON.parse(savedCfg);
-          if (parsed.namaOrganisasi) setNamaOrganisasi(parsed.namaOrganisasi);
-          if (parsed.alamatOrganisasi) setAlamatOrganisasi(parsed.alamatOrganisasi);
-          if (parsed.logoUrl) setLogoUrl(parsed.logoUrl);
-          if (parsed.fotoOrganisasiUrl) setFotoOrganisasiUrl(parsed.fotoOrganisasiUrl);
-          if (parsed.statusBuka !== undefined) setStatusBuka(parsed.statusBuka);
-          if (parsed.pengumumanDarurat !== undefined) setPengumumanDarurat(parsed.pengumumanDarurat);
-          setLastSavedConfig(parsed);
-        } catch { /* ignore */ }
-      }
+      loadConfigFromOfflineCache();
     }
   }, []);
 
@@ -537,20 +659,46 @@ export default function AdminPage() {
         supabase.removeChannel(antreanChannel);
         supabase.removeChannel(configChannel);
       };
-    } else {
-      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-        const bc = new BroadcastChannel('antrean_sync_channel');
-        bc.onmessage = (event) => {
-          if (event.data?.type === 'UPDATE_ALL') loadAntreanData();
-        };
-        return () => {
-          clearTimeout(timer);
-          bc.close();
-        };
-      }
-      return () => clearTimeout(timer);
     }
+    return () => clearTimeout(timer);
   }, [loadAdminData, loadAntreanData]);
+
+  // BroadcastChannel untuk sinkronisasi seketika antar-tab (Display & Loket) baik saat Online maupun Offline
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return;
+    const bc = new BroadcastChannel('antrean_sync_channel');
+    bc.onmessage = (event) => {
+      if (event.data?.type === 'UPDATE_ALL') {
+        loadAntreanData();
+      }
+    };
+    return () => {
+      bc.close();
+    };
+  }, [loadAntreanData]);
+
+  // Listener status koneksi jaringan Admin (Online / Offline)
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsNetworkOnline(true);
+      showToast('Koneksi internet terhubung kembali. Menyinkronkan data loket...', 'success');
+      sinkronisasiDataOffline();
+      loadAdminData();
+    };
+    const handleOffline = () => {
+      setIsNetworkOnline(false);
+      showToast('Koneksi terputus (Offline). Mode cadangan lokal aktif.', 'alert');
+    };
+    if (typeof navigator !== 'undefined') {
+      setIsNetworkOnline(navigator.onLine);
+    }
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [loadAdminData, sinkronisasiDataOffline]);
 
   // -------------------------------------------------------------
   // 4a. Estimasi Waktu Tunggu Live (AI) & Evaluasi Simulasi
@@ -595,28 +743,13 @@ export default function AdminPage() {
     }
   }, []);
 
-  const loadEvaluasiSimulasi = useCallback(async () => {
-    try {
-      const res = await fetch('/api/ml/evaluasi');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.tersedia) {
-          setEvaluasiSimulasi(data);
-        }
-      }
-    } catch (err) {
-      console.warn('[loadEvaluasiSimulasi] Error:', err);
-    }
-  }, []);
-
   useEffect(() => {
     if (activeMenu === 'laporan') {
       const antreanDepan = daftarAntrean.filter((q) => q.status === 'MENUNGGU').length;
       loadLiveAiEstimate(antreanDepan);
-      loadEvaluasiSimulasi();
       loadStatusAiModel();
     }
-  }, [activeMenu, daftarAntrean, loadLiveAiEstimate, loadEvaluasiSimulasi, loadStatusAiModel]);
+  }, [activeMenu, daftarAntrean, loadLiveAiEstimate, loadStatusAiModel]);
 
   // -------------------------------------------------------------
   // 4. Identifikasi Antrean Aktif & Siklus
@@ -640,16 +773,51 @@ export default function AdminPage() {
       `Nomor antrean ${targetItem.nomor} (${targetItem.nama}) dipanggil ke loket pelayanan!`
     );
 
-    // 2. Optimistic local update agar UI langsung responsif seketika
-    setDaftarAntrean((prev) =>
-      prev.map((q) =>
-        q.id === targetItem.id
-          ? { ...q, status: 'MEMANGGIL', panggilan_ke: count, last_called_at: nowIso }
-          : q
-      )
-    );
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
-    // 3. Eksekusi ke server API yang aman
+    // Helper untuk update state, storage lokal, dan siaran antar-tab
+    const updateLocalQueue = (markOfflineUpdate = false) => {
+      let nextList = [];
+      setDaftarAntrean((prev) => {
+        nextList = prev.map((q) => {
+          if (q.id === targetItem.id || q.nomor === targetItem.nomor) {
+            return {
+              ...q,
+              status: 'MEMANGGIL',
+              panggilan_ke: count,
+              last_called_at: nowIso,
+              is_offline_updated: markOfflineUpdate && !q.is_offline_created ? true : q.is_offline_updated,
+            };
+          }
+          return q;
+        });
+        try {
+          localStorage.setItem('antrean_local_db', JSON.stringify(nextList));
+        } catch {}
+        return nextList;
+      });
+
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('antrean_sync_channel');
+          bc.postMessage({
+            type: 'PANGGIL',
+            item: { ...targetItem, status: 'MEMANGGIL', panggilan_ke: count, last_called_at: nowIso },
+          });
+          bc.postMessage({ type: 'UPDATE_ALL' });
+          bc.close();
+        } catch {}
+      }
+    };
+
+    updateLocalQueue(isOffline);
+
+    if (isOffline) {
+      showToast(`Memanggil ${targetItem.nomor} - ${targetItem.nama} (${count}x) [Mode Offline]`, 'success');
+      return;
+    }
+
+    // 3. Eksekusi ke server API jika sedang online
     try {
       const res = await fetch('/api/antrean/aksi', {
         method: 'POST',
@@ -679,13 +847,8 @@ export default function AdminPage() {
       }
     } catch (err) {
       console.warn('Panggilan via API dialihkan ke fallback lokal:', err);
-      const updated = daftarAntrean.map((q) =>
-        q.id === targetItem.id
-          ? { ...q, status: 'MEMANGGIL', panggilan_ke: count, last_called_at: nowIso }
-          : q
-      );
-      localStorage.setItem('antrean_local_db', JSON.stringify(updated));
-      showToast(`Memanggil ${targetItem.nomor} - ${targetItem.nama} (${count}x)`, 'success');
+      updateLocalQueue(true);
+      showToast(`Memanggil ${targetItem.nomor} - ${targetItem.nama} (${count}x) [Mode Offline]`, 'success');
     }
   };
 
@@ -728,33 +891,63 @@ export default function AdminPage() {
       newUrutan = (waitingAfter[0].urutan ?? 0) + 1;
     }
 
-    // Optimistic local update
-    setDaftarAntrean((prev) =>
-      prev.map((q) =>
-        q.id === targetAntrean.id ? { ...q, status: 'TERLAMBAT', urutan: newUrutan } : q
-      )
-    );
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
-    try {
-      await fetch('/api/antrean/aksi', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          aksi: 'LEWATI',
-          data: { id: targetAntrean.id, urutan: newUrutan },
-        }),
+    // Helper untuk update state, storage lokal, dan siaran antar-tab
+    const updateLocalSkip = (markOfflineUpdate = false) => {
+      let nextList = [];
+      setDaftarAntrean((prev) => {
+        nextList = prev.map((q) => {
+          if (q.id === targetAntrean.id || q.nomor === targetAntrean.nomor) {
+            return {
+              ...q,
+              status: 'TERLAMBAT',
+              urutan: newUrutan,
+              is_offline_updated: markOfflineUpdate && !q.is_offline_created ? true : q.is_offline_updated,
+            };
+          }
+          return q;
+        });
+        try {
+          localStorage.setItem('antrean_local_db', JSON.stringify(nextList));
+        } catch {}
+        return nextList;
       });
-    } catch (_) {
-      if (isSupabaseConfigured && supabase) {
-        await supabase
-          .from('antrean')
-          .update({ status: 'TERLAMBAT', urutan: newUrutan })
-          .eq('id', targetAntrean.id)
-          .catch(() => {});
+
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('antrean_sync_channel');
+          bc.postMessage({ type: 'UPDATE_ALL' });
+          bc.close();
+        } catch {}
+      }
+    };
+
+    updateLocalSkip(isOffline);
+
+    if (!isOffline) {
+      try {
+        const res = await fetch('/api/antrean/aksi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            aksi: 'LEWATI',
+            data: { id: targetAntrean.id, urutan: newUrutan },
+          }),
+        });
+        if (!res.ok && isSupabaseConfigured && supabase) {
+          await supabase
+            .from('antrean')
+            .update({ status: 'TERLAMBAT', urutan: newUrutan })
+            .eq('id', targetAntrean.id)
+            .catch(() => {});
+        }
+      } catch (_) {
+        updateLocalSkip(true);
       }
     }
 
-    showToast(`⏭️ ${targetAntrean.nomor} dilewati antreannya`, 'alert');
+    showToast(`⏭️ ${targetAntrean.nomor} dilewati antreannya ${isOffline ? '[Offline]' : ''}`, 'alert');
 
     // Otomatis panggil antrean berikutnya jika ada
     if (waitingAfter.length > 0) {
@@ -780,39 +973,69 @@ export default function AdminPage() {
       (q) => q.id !== targetDone.id && (q.status === 'MENUNGGU' || q.status === 'TERLAMBAT')
     );
 
-    // Optimistic local update
-    setDaftarAntrean((prev) =>
-      prev.map((q) =>
-        q.id === targetDone.id
-          ? { ...q, status: 'SELESAI', finished_at: nowIso, durasi_aktual_menit: durasi }
-          : q
-      )
-    );
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
-    try {
-      await fetch('/api/antrean/aksi', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          aksi: 'SELESAI',
-          data: { id: targetDone.id, durasi_aktual_menit: durasi },
-        }),
+    // Helper untuk update state, storage lokal, dan siaran antar-tab
+    const updateLocalDone = (markOfflineUpdate = false) => {
+      let nextList = [];
+      setDaftarAntrean((prev) => {
+        nextList = prev.map((q) => {
+          if (q.id === targetDone.id || q.nomor === targetDone.nomor) {
+            return {
+              ...q,
+              status: 'SELESAI',
+              finished_at: nowIso,
+              durasi_aktual_menit: durasi,
+              is_offline_updated: markOfflineUpdate && !q.is_offline_created ? true : q.is_offline_updated,
+            };
+          }
+          return q;
+        });
+        try {
+          localStorage.setItem('antrean_local_db', JSON.stringify(nextList));
+        } catch {}
+        return nextList;
       });
-    } catch (_) {
-      if (isSupabaseConfigured && supabase) {
-        await supabase
-          .from('antrean')
-          .update({
-            status: 'SELESAI',
-            finished_at: nowIso,
-            durasi_aktual_menit: durasi,
-          })
-          .eq('id', targetDone.id)
-          .catch(() => {});
+
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('antrean_sync_channel');
+          bc.postMessage({ type: 'UPDATE_ALL' });
+          bc.close();
+        } catch {}
+      }
+    };
+
+    updateLocalDone(isOffline);
+
+    if (!isOffline) {
+      try {
+        const res = await fetch('/api/antrean/aksi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            aksi: 'SELESAI',
+            data: { id: targetDone.id, durasi_aktual_menit: durasi },
+          }),
+        });
+        if (!res.ok && isSupabaseConfigured && supabase) {
+          await supabase
+            .from('antrean')
+            .update({
+              status: 'SELESAI',
+              finished_at: nowIso,
+              durasi_aktual_menit: durasi,
+            })
+            .eq('id', targetDone.id)
+            .catch(() => {});
+        }
+      } catch (err) {
+        console.warn('Selesai via API dialihkan ke fallback lokal:', err);
+        updateLocalDone(true);
       }
     }
 
-    showToast(`✅ ${targetDone.nomor} (${targetDone.nama}) selesai dilayani`, 'success');
+    showToast(`✅ ${targetDone.nomor} (${targetDone.nama}) selesai dilayani ${isOffline ? '[Offline]' : ''}`, 'success');
 
     // Otomatis langsung panggil antrean berikutnya jika selesai dari tombol master atas
     if (!customTarget && nextCandidates.length > 0) {
@@ -917,52 +1140,79 @@ export default function AdminPage() {
     const targetId = itemAkanDibatalkan.id;
     const nomorTiket = itemAkanDibatalkan.nomor;
     const nowIso = new Date().toISOString();
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
-    // Optimistic local update agar tabel segera bereaksi
-    setDaftarAntrean((prev) =>
-      prev.map((q) =>
-        q.id === targetId
-          ? { ...q, status: 'DIBATALKAN', finished_at: nowIso, waktu_dibatalkan: nowIso, alasan_batal: 'Dibatalkan oleh Petugas Loket' }
-          : q
-      )
-    );
-
-    try {
-      const res = await fetch('/api/antrean/aksi', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          aksi: 'BATALKAN',
-          data: { id: targetId, alasan: 'Dibatalkan oleh Petugas Loket' },
-        }),
-      });
-
-      const resData = await res.json().catch(() => ({}));
-      if (!res.ok || !resData.sukses) {
-        if (isSupabaseConfigured && supabase) {
-          await supabase
-            .from('antrean')
-            .update({
+    // Helper untuk update state, storage lokal, dan siaran antar-tab
+    const updateLocalBatal = (markOfflineUpdate = false) => {
+      let nextList = [];
+      setDaftarAntrean((prev) => {
+        nextList = prev.map((q) => {
+          if (q.id === targetId || q.nomor === nomorTiket) {
+            return {
+              ...q,
               status: 'DIBATALKAN',
               finished_at: nowIso,
               waktu_dibatalkan: nowIso,
               alasan_batal: 'Dibatalkan oleh Petugas Loket',
-            })
-            .eq('id', targetId)
-            .catch(() => {});
-        }
-      }
+              is_offline_updated: markOfflineUpdate && !q.is_offline_created ? true : q.is_offline_updated,
+            };
+          }
+          return q;
+        });
+        try {
+          localStorage.setItem('antrean_local_db', JSON.stringify(nextList));
+        } catch {}
+        return nextList;
+      });
 
-      showToast(`Antrean ${nomorTiket} (${itemAkanDibatalkan.nama}) berhasil dibatalkan.`, 'info');
-    } catch (err) {
-      console.error('Gagal batalkan antrean:', err);
-      showToast('Gagal memproses pembatalan antrean.', 'alert');
-    } finally {
-      setIsSubmittingBatal(false);
-      setShowBatalModal(false);
-      setItemAkanDibatalkan(null);
-      setTeksKonfirmasiBatal('');
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('antrean_sync_channel');
+          bc.postMessage({ type: 'UPDATE_ALL' });
+          bc.close();
+        } catch {}
+      }
+    };
+
+    updateLocalBatal(isOffline);
+
+    if (!isOffline) {
+      try {
+        const res = await fetch('/api/antrean/aksi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            aksi: 'BATALKAN',
+            data: { id: targetId, alasan: 'Dibatalkan oleh Petugas Loket' },
+          }),
+        });
+
+        const resData = await res.json().catch(() => ({}));
+        if (!res.ok || !resData.sukses) {
+          if (isSupabaseConfigured && supabase) {
+            await supabase
+              .from('antrean')
+              .update({
+                status: 'DIBATALKAN',
+                finished_at: nowIso,
+                waktu_dibatalkan: nowIso,
+                alasan_batal: 'Dibatalkan oleh Petugas Loket',
+              })
+              .eq('id', targetId)
+              .catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('Gagal batalkan via API, dialihkan ke offline:', err);
+        updateLocalBatal(true);
+      }
     }
+
+    showToast(`Antrean ${nomorTiket} (${itemAkanDibatalkan.nama}) berhasil dibatalkan ${isOffline ? '[Offline]' : ''}.`, 'info');
+    setIsSubmittingBatal(false);
+    setShowBatalModal(false);
+    setItemAkanDibatalkan(null);
+    setTeksKonfirmasiBatal('');
   };
 
   // -------------------------------------------------------------
@@ -977,7 +1227,55 @@ export default function AdminPage() {
     }
 
     setIsSubmittingTambah(true);
+
+    const buatAntreanManualOffline = () => {
+      const nomorBaru = generateNextQueueNumber(daftarAntrean);
+      const maxUrutan = daftarAntrean.reduce((max, q) => Math.max(max, q.urutan ?? 0), 0);
+      const antreanAktif = daftarAntrean.filter(
+        (q) => !q.is_archived && (q.status === 'MENUNGGU' || q.status === 'MEMANGGIL')
+      );
+      const estimasiAwal = Math.max(5, (antreanAktif.length + 1) * 5);
+
+      const tiketBaru = {
+        id: Date.now(),
+        nomor: nomorBaru,
+        nama: namaBersih,
+        sumber: 'LOKET',
+        status: 'MENUNGGU',
+        estimasi_menit: estimasiAwal,
+        urutan: maxUrutan + 1,
+        panggilan_ke: 0,
+        is_archived: false,
+        created_at: new Date().toISOString(),
+        is_offline_created: true,
+      };
+
+      const updated = [...daftarAntrean, tiketBaru];
+      setDaftarAntrean(updated);
+      try {
+        localStorage.setItem('antrean_local_db', JSON.stringify(updated));
+      } catch { /* ignore */ }
+
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        try {
+          const bc = new BroadcastChannel('antrean_sync_channel');
+          bc.postMessage({ type: 'UPDATE_ALL' });
+          bc.close();
+        } catch { /* ignore */ }
+      }
+
+      showToast(`Antrean ${tiketBaru.nomor} untuk ${tiketBaru.nama} berhasil didaftarkan (Mode Offline)!`, 'success');
+      setShowTambahAntreanModal(false);
+      setNamaPengunjungBaru('');
+    };
+
     try {
+      const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+      if (!isOnline) {
+        buatAntreanManualOffline();
+        return;
+      }
+
       const res = await fetch('/api/antrean/daftar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -994,18 +1292,23 @@ export default function AdminPage() {
         const tiketBaru = dataRes.tiket;
         setDaftarAntrean((prev) => {
           const exists = prev.some((q) => q.id === tiketBaru.id);
-          if (exists) return prev;
-          return [...prev, tiketBaru];
+          const nextList = exists ? prev : [...prev, tiketBaru];
+          try {
+            localStorage.setItem('antrean_local_db', JSON.stringify(nextList));
+          } catch { /* ignore */ }
+          return nextList;
         });
         showToast(`Antrean ${tiketBaru.nomor} untuk ${tiketBaru.nama} berhasil didaftarkan!`, 'success');
         setShowTambahAntreanModal(false);
         setNamaPengunjungBaru('');
       } else {
-        throw new Error(dataRes.pesan || 'Gagal mendaftarkan antrean baru.');
+        // Gagal server/jaringan -> alihkan otomatis ke pendaftaran offline
+        console.warn('Gagal koneksi API pendaftaran, beralih ke pendaftaran lokal:', dataRes.pesan);
+        buatAntreanManualOffline();
       }
     } catch (err) {
-      console.error('Gagal tambah antrean manual:', err);
-      showToast(err.message || 'Gagal mendaftarkan antrean manual.', 'alert');
+      console.warn('Jaringan offline saat tambah antrean manual, fallback lokal:', err);
+      buatAntreanManualOffline();
     } finally {
       setIsSubmittingTambah(false);
     }
@@ -1407,69 +1710,6 @@ export default function AdminPage() {
       showToast(`Kendala reset: ${err.message || 'Kesalahan sistem'}`, 'alert');
     } finally {
       setIsResettingAI(false);
-    }
-  };
-
-  // Handler Latih Langsung dari Data Laporan Terfilter Aktif
-  const handleLatihLangsungDariLaporanAktif = async () => {
-    const filteredRows = getFilteredReportRows();
-    if (filteredRows.length === 0) {
-      showToast('Tidak ada data antrean berstatus SELESAI pada filter saat ini.', 'alert');
-      return;
-    }
-
-    setIsRetrainingAI(true);
-    setRetrainResult(null);
-
-    try {
-      const dataPayload = filteredRows.map((row, idx) => {
-        let durasi = 7.0;
-        if (row.durasi_aktual_menit) {
-          const val = Number(row.durasi_aktual_menit);
-          if (!isNaN(val) && val > 0 && val <= 120) durasi = val;
-        } else if (row.created_at && row.finished_at) {
-          const diff = (new Date(row.finished_at) - new Date(row.created_at)) / 60000;
-          if (diff > 0 && diff <= 120) {
-            durasi = Number(diff.toFixed(1));
-          } else if (diff > 120) {
-            durasi = 7.0; // Jika dibiarkan berjam-jam/seharian, gunakan standar wajar loket
-          }
-        }
-        // Batasi rentang durasi wajar pelayanan pendaftaran loket Puskesmas (1 s.d. 45 menit)
-        durasi = Math.min(45, Math.max(1, durasi));
-
-        const d = row.created_at ? new Date(row.created_at) : new Date();
-        const jamDaftar = Number((d.getHours() + d.getMinutes() / 60).toFixed(2));
-        const antreanDepan = row.urutan > 1 ? row.urutan - 1 : idx;
-
-        return {
-          nomor: row.nomor || `A-${idx + 1}`,
-          antrean_di_depan: Math.min(50, Math.max(0, antreanDepan)),
-          jam_daftar: jamDaftar,
-          rata_waktu_pelayanan: 7.0,
-          waktu_tunggu_menit: durasi,
-          status: 'COMPLETE',
-        };
-      });
-
-      const res = await fetch('/api/ml/retrain', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: dataPayload }),
-      });
-
-      const resData = await res.json();
-      if (!res.ok || !resData.sukses) {
-        throw new Error(resData.error || resData.pesan || 'Gagal memperbarui model AI');
-      }
-
-      setRetrainResult(resData);
-      showToast('Model Random Forest AI berhasil diperbarui dari laporan aktif!', 'success');
-    } catch (err) {
-      console.error('Gagal latih model dari laporan aktif:', err);
-      showToast(`Kendala pelatihan: ${err.message || 'Gagal memproses data'}`, 'alert');
-    } finally {
-      setIsRetrainingAI(false);
     }
   };
 
@@ -2065,7 +2305,7 @@ export default function AdminPage() {
   // RENDER: DASHBOARD ADMIN UTAMA
   // -------------------------------------------------------------
   return (
-    <main className="min-h-screen font-sans pb-20 relative bg-gradient-to-b from-slate-50 via-teal-50/20 to-slate-100/70 text-slate-800 lg:flex lg:flex-row">
+    <main className="min-h-screen font-sans relative bg-gradient-to-b from-slate-50 via-teal-50/20 to-slate-100/70 text-slate-800 lg:flex lg:flex-row lg:items-start">
 
       {/* LATAR BELAKANG FOTO ORGANISASI (Sama seperti halaman antrean pengunjung) */}
       {fotoOrganisasiUrl ? (
@@ -2105,10 +2345,10 @@ export default function AdminPage() {
       )}
 
       {/* SIDEBAR NAVIGASI */}
-      <aside className={`fixed top-0 left-0 h-full w-64 z-50 lg:sticky lg:top-0 lg:z-auto lg:flex lg:flex-col lg:min-h-screen transition-transform duration-300 ease-in-out ${
+      <aside className={`fixed top-0 left-0 h-full w-64 z-50 lg:sticky lg:top-0 lg:h-screen lg:max-h-screen lg:shrink-0 lg:self-start lg:z-30 lg:flex lg:flex-col lg:overflow-hidden transition-transform duration-300 ease-in-out ${
         sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
       }`}>
-        <div className="h-full lg:h-screen bg-white/95 backdrop-blur-md border-r border-slate-200/80 shadow-xl lg:shadow-sm flex flex-col lg:sticky lg:top-0">
+        <div className="h-full w-full bg-white/95 backdrop-blur-md border-r border-slate-200/80 shadow-xl lg:shadow-sm flex flex-col justify-between overflow-hidden">
 
           {/* Logo / Brand */}
           <div className="p-5 border-b border-slate-100 shrink-0">
@@ -2214,6 +2454,33 @@ export default function AdminPage() {
                   <span className={`w-1.5 h-1.5 rounded-full ${statusBuka ? 'bg-emerald-600 animate-pulse' : 'bg-rose-600'}`} />
                   {statusBuka ? 'Pendaftaran Buka' : 'Pendaftaran Tutup'}
                 </span>
+                {/* Indikator Status Koneksi & Sinkronisasi Cloud */}
+                {!isNetworkOnline ? (
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap bg-amber-100 text-amber-900 border border-amber-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-ping" />
+                    Mode Offline {pendingOfflineCount > 0 ? `(${pendingOfflineCount} antrean lokal)` : ''}
+                  </span>
+                ) : isSyncingOffline ? (
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap bg-blue-100 text-blue-900 border border-blue-200 animate-pulse">
+                    <RefreshCw className="w-3 h-3 animate-spin text-blue-700" />
+                    Menyinkronkan...
+                  </span>
+                ) : pendingOfflineCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => sinkronisasiDataOffline()}
+                    className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap bg-orange-100 text-orange-900 border border-orange-300 hover:bg-orange-200 cursor-pointer transition-all shadow-xs"
+                    title="Klik untuk menyinkronkan data antrean offline ke cloud"
+                  >
+                    <RefreshCw className="w-3 h-3 text-orange-700" />
+                    {pendingOfflineCount} Antrean Lokal · Sinkronkan
+                  </button>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full whitespace-nowrap bg-teal-50 text-teal-800 border border-teal-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
+                    Cloud Terhubung
+                  </span>
+                )}
               </div>
               <h1 className="text-lg sm:text-xl font-black text-slate-900 truncate leading-tight">{namaOrganisasi}</h1>
               <p className="text-xs text-slate-500 line-clamp-1 sm:truncate max-w-full break-all sm:break-normal">{alamatOrganisasi}</p>
@@ -4222,16 +4489,6 @@ export default function AdminPage() {
                       )}
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={handleLatihLangsungDariLaporanAktif}
-                      disabled={isRetrainingAI || getFilteredReportRows().length === 0}
-                      className="w-full py-2.5 px-3 rounded-xl text-[11px] font-bold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5 text-teal-600" />
-                      Latih Langsung dari {getFilteredReportRows().length} Data Terfilter
-                    </button>
-
                     {/* Tombol Reset Data Pelatihan AI */}
                     <button
                       type="button"
@@ -5429,8 +5686,6 @@ export default function AdminPage() {
           </div>
         </div>
       )}
-
-      {/* Modal Detail Evaluasi Simulasi kini sudah disajikan langsung dalam Card Inline di Halaman Laporan */}
 
     </main>
   );

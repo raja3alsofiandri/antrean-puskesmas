@@ -1,15 +1,12 @@
 {
-  "versi": "v20261022_113419",
+  "versi": "vDefault_Awal",
   "fitur": [
     "antrean_di_depan",
     "rata_waktu_pelayanan",
     "jam_daftar"
   ],
-  "total_sampel": 10,
-  "sampel_latih": 8,
-  "sampel_uji": 2,
-  "mae": 1.8,
-  "mae_sebelumnya": null,
-  "waktu_pelatihan": "2026-10-22T11:34:19.157698",
-  "status": "AKTIF"
+  "total_sampel": 0,
+  "status": "RESET_BERSIH",
+  "keterangan": "Model menggunakan estimasi adaptif bawaan.",
+  "waktu_reset": "2026-10-22T12:01:51.839318"
 }
